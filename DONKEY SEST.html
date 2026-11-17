@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Donkey Sest</title>
+<style>
+  /* Fundo escuro e tela centralizada, sem rolagem */
+  html, body { margin: 0; height: 100%; background: #0b0f1a; overflow: hidden;
+               touch-action: none; user-select: none; -webkit-user-select: none; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="tela"></canvas>
+<script>
+// =====================================================
+// DONKEY SEST - suba a torre sem ser atingido pelos barris
+// =====================================================
+
+// ---------- Tamanho do jogo ----------
+// O jogo "pensa" em 360 x 640 (formato de celular em pé).
+// A função ajustarTela estica isso para caber em qualquer tela.
+const L = 360, A = 640;
+const tela = document.getElementById('tela');
+const ctx = tela.getContext('2d');
+let escala = 1;
+
+function ajustarTela() {
+  const dpr = window.devicePixelRatio || 1;
+  const e = Math.min(window.innerWidth / L, window.innerHeight / A);
+  tela.style.width = (L * e) + 'px';
+  tela.style.height = (A * e) + 'px';
+  tela.width = Math.round(L * e * dpr);
+  tela.height = Math.round(A * e * dpr);
+  escala = tela.width / L;
+}
+window.addEventListener('resize', ajustarTela);
+ajustarTela();
+
+// ---------- Números do jogo (mude aqui para ajustar a dificuldade) ----------
+const RAIO = 9;          // tamanho do barril
+const VEL = 85;          // velocidade do herói andando
+const VEL_ESCADA = 60;   // velocidade do herói na escada
+const GRAVIDADE = 900;   // quão rápido as coisas caem
+const FORCA_PULO = 330;  // força do pulo
+const TEMPO_MARRETA = 8; // segundos de marreta depois de pegar uma
+
+// ---------- A torre ----------
+// Cada andar: y = altura do chão, x1/x2 = onde começa e termina,
+// dir = para que lado os barris rolam (em direção ao buraco).
+const andares = [
+  { y: 600, x1: 0,  x2: 360, dir: -1 }, // 0 = chão
+  { y: 510, x1: 0,  x2: 300, dir:  1 },
+  { y: 420, x1: 60, x2: 360, dir: -1 },
+  { y: 330, x1: 0,  x2: 300, dir:  1 },
+  { y: 240, x1: 60, x2: 360, dir: -1 },
+  { y: 150, x1: 0,  x2: 200, dir:  1 }  // 5 = topo (o vilão fica aqui)
+];
+const TOPO = andares.length - 1;
+
+// Cada escada liga o andar "base" ao andar de cima dele.
+const escadas = [
+  { x: 250, base: 0 }, { x: 80,  base: 0 },
+  { x: 120, base: 1 }, { x: 270, base: 1 },
+  { x: 240, base: 2 }, { x: 90,  base: 2 },
+  { x: 100, base: 3 }, { x: 260, base: 3 },
+  { x: 150, base: 4 }
+];
+
+// ---------- Estado do jogo ----------
+let estado = 'menu';   // menu, jogo, perdeu ou ganhou
+let jogador, barris, popups, martelos, particulas;
+let vidas, pontos, recorde = 0, andarMax;
+let tempoJogo, tempoSpawn, tremor, tempoFerido, invulneravel;
+let martelo = 0;       // segundos de marreta que ainda restam
+let relogio = 0;       // relógio geral (para animações)
+let bloqueio = 0;      // evita recomeçar sem querer logo após o fim
+
+try { recorde = parseInt(localStorage.getItem('donkeySestRecorde')) || 0; } catch (e) {}
+
+function novoJogador() {
+  return { x: 180, y: andares[0].y, vx: 0, vy: 0, andar: 0,
+           estado: 'chao', face: 1, anim: 0, escada: null };
+}
+
+// Zera tudo para começar uma partida nova
+function preparar() {
+  jogador = novoJogador();
+  barris = [];
+  popups = [];
+  particulas = [];
+  martelo = 0;
+  // 3 marretas espalhadas pela torre (andar e posição)
+  martelos = [
+    { andar: 1, x: 190, coletado: false },
+    { andar: 2, x: 320, coletado: false },
+    { andar: 4, x: 290, coletado: false }
+  ];
+  vidas = 3;
+  pontos = 0;
+  andarMax = 0;
+  tempoJogo = 0;
+  tempoSpawn = 1.5;
+  tremor = 0;
+  tempoFerido = 0;
+  invulneravel = 0;
+}
+preparar();
+
+function iniciar() {
+  if (performance.now() < bloqueio) return;
+  if (estado !== 'jogo') { preparar(); estado = 'jogo'; }
+}
+
+// ---------- Controles ----------
+const teclas = {};
+const toque = { esq: false, dir: false, cima: false, baixo: false, cimaBorda: false };
+let pedidoPulo = false;
+let ponteiro = null;
+
+window.addEventListener('keydown', function (e) {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) e.preventDefault();
+  if (!teclas[e.key] && (e.key === ' ' || e.key === 'Enter')) {
+    if (estado === 'jogo') pedidoPulo = true; else iniciar();
+  }
+  teclas[e.key] = true;
+});
+window.addEventListener('keyup', function (e) { teclas[e.key] = false; });
+window.addEventListener('blur', function () { for (const k in teclas) teclas[k] = false; });
+
+// Toque / mouse: arrastar anda e sobe; toque rápido pula
+tela.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+tela.addEventListener('pointerdown', function (e) {
+  e.preventDefault();
+  if (estado !== 'jogo') { iniciar(); return; }
+  if (ponteiro && e.pointerId !== ponteiro.id) { pedidoPulo = true; return; } // 2º dedo = pulo
+  try { tela.setPointerCapture(e.pointerId); } catch (err) {}
+  ponteiro = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moveu: false };
+});
+tela.addEventListener('pointermove', function (e) {
+  if (!ponteiro || e.pointerId !== ponteiro.id) return;
+  const dx = e.clientX - ponteiro.x0, dy = e.clientY - ponteiro.y0;
+  if (Math.hypot(dx, dy) > 12) ponteiro.moveu = true;
+  toque.esq = dx < -12;
+  toque.dir = dx > 12;
+  const cimaNova = dy < -22;
+  if (cimaNova && !toque.cima) toque.cimaBorda = true; // arrastou para cima agora
+  toque.cima = cimaNova;
+  toque.baixo = dy > 22;
+});
+function fimToque(e) {
+  if (!ponteiro || e.pointerId !== ponteiro.id) return;
+  if (!ponteiro.moveu && performance.now() - ponteiro.t0 < 300 && estado === 'jogo') pedidoPulo = true;
+  ponteiro = null;
+  toque.esq = toque.dir = toque.cima = toque.baixo = false;
+}
+tela.addEventListener('pointerup', fimToque);
+tela.addEventListener('pointercancel', fimToque);
+
+// ---------- Regras do jogo ----------
+function escadaPerto(x, base) {
+  return escadas.find(function (e) { return e.base === base && Math.abs(e.x - x) <= 10; });
+}
+
+function jogarBarril() {
+  barris.push({ x: 78, y: andares[TOPO].y - RAIO, vx: 0, vy: 0, dir: 1,
+                andar: TOPO, caindo: false, rot: 0, pontuou: false });
+}
+
+function atualizarJogador(dt) {
+  const j = jogador;
+  const esq = teclas['ArrowLeft'] || toque.esq;
+  const dir = teclas['ArrowRight'] || toque.dir;
+  const cima = teclas['ArrowUp'] || toque.cima;
+  const baixo = teclas['ArrowDown'] || toque.baixo;
+
+  if (j.estado === 'chao') {
+    // andar para os lados
+    let m = 0;
+    if (esq) m -= 1;
+    if (dir) m += 1;
+    j.x += m * VEL * dt;
+    if (m !== 0) { j.face = m; j.anim += dt * 10; }
+    const a = andares[j.andar];
+    j.x = Math.max(a.x1 + 7, Math.min(a.x2 - 7, j.x));
+
+    const subir = escadaPerto(j.x, j.andar);
+    const descer = j.andar > 0 ? escadaPerto(j.x, j.andar - 1) : null;
+    const forte = martelo > 0; // com a marreta na mão não dá para subir nem pular
+    if (cima && subir && !forte) {
+      j.estado = 'escada'; j.escada = subir; j.x = subir.x;
+    } else if (baixo && descer && !forte) {
+      j.estado = 'escada'; j.escada = descer; j.x = descer.x;
+    } else if (!forte && (pedidoPulo || (toque.cimaBorda && !subir))) {
+      j.estado = 'ar'; j.vy = -FORCA_PULO; j.vx = m * VEL;
+    }
+  } else if (j.estado === 'ar') {
+    j.x += j.vx * dt;
+    const a = andares[j.andar];
+    j.x = Math.max(a.x1 + 7, Math.min(a.x2 - 7, j.x));
+    j.vy += GRAVIDADE * dt;
+    j.y += j.vy * dt;
+    if (j.y >= a.y) { j.y = a.y; j.vy = 0; j.vx = 0; j.estado = 'chao'; }
+  } else if (j.estado === 'escada') {
+    const yBase = andares[j.escada.base].y;
+    const yTopo = andares[j.escada.base + 1].y;
+    let m = 0;
+    if (cima) m = -1;
+    if (baixo) m = 1;
+    j.y += m * VEL_ESCADA * dt;
+    if (m !== 0) j.anim += dt * 10;
+    if (j.y <= yTopo) {            // chegou no andar de cima
+      j.y = yTopo; j.estado = 'chao'; j.andar = j.escada.base + 1;
+      if (j.andar > andarMax) andarMax = j.andar;
+      if (j.andar === TOPO) ganhar();
+    } else if (j.y >= yBase) {     // voltou para o andar de baixo
+      j.y = yBase; j.estado = 'chao'; j.andar = j.escada.base;
+    }
+  }
+}
+
+function atualizarBarris(dt) {
+  const vel = 70 + 6 * andarMax; // barris ficam mais rápidos conforme você sobe
+  for (let i = barris.length - 1; i >= 0; i--) {
+    const b = barris[i];
+    if (!b.caindo) {
+      // barril rolando no andar
+      const xAntes = b.x;
+      b.x += b.dir * vel * dt;
+      b.rot += b.dir * vel * dt / RAIO;
+      // às vezes o barril desce por uma escada
+      for (const e of escadas) {
+        if (e.base + 1 === b.andar && (xAntes - e.x) * (b.x - e.x) <= 0 && Math.random() < 0.25) {
+          b.caindo = true; b.vx = 0; b.vy = 0; b.x = e.x;
+        }
+      }
+      const a = andares[b.andar];
+      if (!b.caindo && (b.x < a.x1 || b.x > a.x2)) {
+        if (b.andar === 0) { if (b.x < -RAIO) barris.splice(i, 1); continue; }
+        b.caindo = true; b.vx = b.dir * vel * 0.5; b.vy = 0; // cai pelo buraco
+      }
+    } else {
+      // barril caindo até o andar de baixo
+      const yAntes = b.y;
+      b.vy += GRAVIDADE * dt;
+      b.y += b.vy * dt;
+      b.x += b.vx * dt;
+      b.rot += 0.2;
+      for (let k = b.andar - 1; k >= 0; k--) {
+        const a = andares[k];
+        if (b.x >= a.x1 && b.x <= a.x2 && yAntes + RAIO <= a.y && b.y + RAIO >= a.y) {
+          b.y = a.y - RAIO; b.andar = k; b.caindo = false; b.dir = a.dir; b.vy = 0; b.vx = 0;
+          break;
+        }
+      }
+      if (b.y > A + 40) barris.splice(i, 1);
+    }
+  }
+}
+
+// Verifica se o barril encostou num retângulo (folga positiva = mais generoso)
+function colide(b, r, folga) {
+  const cx = Math.max(r.l, Math.min(b.x, r.r));
+  const cy = Math.max(r.t, Math.min(b.y, r.b));
+  const dx = b.x - cx, dy = b.y - cy;
+  const raio = RAIO + folga;
+  return dx * dx + dy * dy < raio * raio;
+}
+
+// Quebra um barril com a marreta: pontos, textinho e pedacinhos voando
+function destruir(i) {
+  const b = barris[i];
+  pontos += 300;
+  popups.push({ x: b.x, y: b.y - 14, txt: '+300', t: 0 });
+  for (let k = 0; k < 8; k++) {
+    particulas.push({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 140, t: 0 });
+  }
+  barris.splice(i, 1);
+}
+
+function verificarBarris() {
+  const j = jogador;
+  const r = { l: j.x - 6, r: j.x + 6, t: j.y - 26, b: j.y - 1 };
+  const forte = martelo > 0;
+  // área da marreta: um pouco à frente do herói
+  const x2 = j.x + j.face * 28;
+  const zona = { l: Math.min(j.x - 7, x2), r: Math.max(j.x + 7, x2), t: j.y - 38, b: j.y };
+  for (let i = barris.length - 1; i >= 0; i--) {
+    const b = barris[i];
+    if (forte) {                       // com a marreta nenhum barril machuca: todos quebram
+      if (colide(b, zona, 2) || colide(b, r, 0)) destruir(i);
+      continue;
+    }
+    // pulou por cima de um barril: ganha pontos
+    if (!b.pontuou && !b.caindo && j.estado === 'ar' && b.andar === j.andar &&
+        Math.abs(b.x - j.x) < 12 && j.y < b.y - RAIO) {
+      b.pontuou = true;
+      pontos += 100;
+      popups.push({ x: j.x, y: j.y - 34, txt: '+100', t: 0 });
+    }
+    if (invulneravel <= 0 && colide(b, r, -2)) { ferido(); return; }
+  }
+}
+
+function ferido() {
+  vidas -= 1;
+  tremor = 0.4;
+  tempoFerido = 1.1;
+  jogador.estado = 'ferido';
+}
+
+function ganhar() {
+  const bonus = Math.max(0, Math.round(1000 - tempoJogo * 8)); // quanto mais rápido, mais pontos
+  pontos += bonus;
+  popups.push({ x: 180, y: 120, txt: 'Bônus de tempo +' + bonus, t: 0 });
+  salvarRecorde();
+  estado = 'ganhou';
+  bloqueio = performance.now() + 800;
+}
+
+function salvarRecorde() {
+  if (pontos > recorde) {
+    recorde = pontos;
+    try { localStorage.setItem('donkeySestRecorde', String(recorde)); } catch (e) {}
+  }
+}
+
+// Pega a marreta quando o herói encosta nela
+function pegarMarretas() {
+  const j = jogador;
+  for (const m of martelos) {
+    if (!m.coletado && j.andar === m.andar && j.estado !== 'escada' && Math.abs(j.x - m.x) < 12) {
+      m.coletado = true;
+      martelo = TEMPO_MARRETA;
+      popups.push({ x: j.x, y: j.y - 40, txt: 'MARRETA!', t: 0 });
+    }
+  }
+}
+
+function atualizar(dt) {
+  for (const p of popups) p.t += dt;
+  popups = popups.filter(function (p) { return p.t < 1.2; });
+  for (const p of particulas) { p.t += dt; p.vy += 600 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  particulas = particulas.filter(function (p) { return p.t < 0.6; });
+  if (tremor > 0) tremor -= dt;
+  if (estado !== 'jogo') return;
+
+  tempoJogo += dt;
+  if (invulneravel > 0) invulneravel -= dt;
+
+  if (tempoFerido > 0) {
+    // herói caiu: espera um pouco e volta ao início
+    tempoFerido -= dt;
+    if (tempoFerido <= 0) {
+      if (vidas <= 0) {
+        salvarRecorde();
+        estado = 'perdeu';
+        bloqueio = performance.now() + 800;
+      } else {
+        jogador = novoJogador();
+        barris = [];
+        invulneravel = 1.5;
+        tempoSpawn = 1.2;
+      }
+    }
+  } else {
+    // o vilão joga barris cada vez mais seguidos
+    tempoSpawn -= dt;
+    if (tempoSpawn <= 0) {
+      jogarBarril();
+      tempoSpawn = Math.max(1.1, 2.6 - 0.25 * andarMax) + Math.random() * 0.6;
+    }
+    atualizarJogador(dt);
+    if (martelo > 0) martelo = Math.max(0, martelo - dt);
+    pegarMarretas();
+    if (estado === 'jogo') {
+      atualizarBarris(dt);
+      verificarBarris();
+    }
+  }
+  pedidoPulo = false;
+  toque.cimaBorda = false;
+}
+
+// =====================================================
+// DESENHO
+// =====================================================
+function texto(t, x, y, tam, cor, alinhar) {
+  ctx.font = 'bold ' + tam + 'px sans-serif';
+  ctx.fillStyle = cor;
+  ctx.textAlign = alinhar || 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(t, x, y);
+}
+
+// Prédios da cidade: gerados uma vez só (números "aleatórios" fixos, sempre iguais)
+function gerarPredios(semente, alturaMin, alturaMax, larguraMin) {
+  let s = semente;
+  function aleatorio() { s = (s * 16807) % 2147483647; return s / 2147483647; }
+  const lista = [];
+  let x = -10;
+  while (x < L) {
+    const w = larguraMin + Math.floor(aleatorio() * 26);
+    const h = alturaMin + Math.floor(aleatorio() * (alturaMax - alturaMin));
+    const luzes = [];
+    for (let i = 0; i < 4; i++) {
+      const dy = 12 + Math.floor(aleatorio() * h * 0.7);
+      luzes.push({ dx: 3 + Math.floor(aleatorio() * Math.max(1, w - 8)), dy: dy,
+                   h: Math.max(2, Math.min(6 + Math.floor(aleatorio() * 28), h - dy - 2)),
+                   cor: aleatorio() < 0.5 ? '#38d6ff' : '#5a7dff' });
+    }
+    lista.push({ x: x, w: w, h: h, antena: aleatorio() < 0.45 ? 10 + Math.floor(aleatorio() * 28) : 0, luzes: luzes });
+    x += w - 3 + Math.floor(aleatorio() * 6);
+  }
+  return lista;
+}
+const prediosFundo = gerarPredios(11, 90, 260, 16);   // prédios de trás (mais claros)
+const prediosFrente = gerarPredios(7, 130, 340, 20);  // prédios da frente (mais escuros)
+
+function desenharPredios(lista, cor, alpha) {
+  for (const p of lista) {
+    const topo = 610 - p.h;
+    ctx.fillStyle = cor;
+    ctx.fillRect(p.x, topo, p.w, p.h);
+    if (p.antena) ctx.fillRect(p.x + Math.floor(p.w / 2), topo - p.antena, 2, p.antena);
+    ctx.globalAlpha = alpha;                        // luzes de neon nas janelas
+    for (const l of p.luzes) { ctx.fillStyle = l.cor; ctx.fillRect(p.x + l.dx, topo + l.dy, 2, l.h); }
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Nuvem feita de blocos, no estilo "pixel"
+function nuvem(x, y, w) {
+  ctx.fillStyle = '#8a7be0';
+  ctx.fillRect(x, y, w, 6);
+  ctx.fillRect(x + 8, y - 6, w - 18, 6);
+  ctx.fillRect(x + 18, y - 12, w - 40, 6);
+  ctx.fillStyle = '#6a58c4';
+  ctx.fillRect(x + 4, y + 6, w - 8, 3);
+}
+
+function desenharFundo() {
+  // céu roxo que vira rosa perto do chão
+  const g = ctx.createLinearGradient(0, 0, 0, 610);
+  g.addColorStop(0, '#24105a');
+  g.addColorStop(0.5, '#4a2397');
+  g.addColorStop(0.85, '#c0489f');
+  g.addColorStop(1, '#ff7cc0');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, L, A);
+  // listras horizontais no céu
+  ctx.fillStyle = 'rgba(190,150,255,0.14)';
+  for (let y = 200; y < 600; y += 22) ctx.fillRect(0, y, L, 4 + (y - 200) / 60);
+  // nuvens devagarinho para o lado
+  const nuvens = [[20, 120, 70], [190, 170, 90], [260, 90, 60], [90, 260, 80]];
+  for (const n of nuvens) nuvem(((n[0] + relogio * 5) % (L + 140)) - 90, n[1], n[2]);
+  // cidade
+  desenharPredios(prediosFundo, '#33206e', 0.5);
+  desenharPredios(prediosFrente, '#150b32', 0.9);
+  // chão de pedras roxas
+  ctx.fillStyle = '#2b2158';
+  ctx.fillRect(0, 610, L, 30);
+  ctx.fillStyle = '#9b5cff';
+  ctx.fillRect(0, 610, L, 4);
+  ctx.fillStyle = '#41367d';
+  for (let y = 618; y < 640; y += 10) {
+    for (let x = ((y / 10) % 2) * 10; x < L; x += 20) ctx.fillRect(x, y, 16, 7);
+  }
+}
+
+function desenharAndares() {
+  for (const a of andares) {
+    const w = a.x2 - a.x1;
+    ctx.fillStyle = '#5a2fa8';
+    ctx.fillRect(a.x1, a.y, w, 10);
+    ctx.fillStyle = '#2f1a66';
+    for (let x = a.x1 + 4; x < a.x2 - 8; x += 16) ctx.fillRect(x, a.y + 4, 8, 3);
+    ctx.fillStyle = '#ff5fd2';             // faixa de neon rosa em cima
+    ctx.fillRect(a.x1, a.y, w, 2);
+  }
+}
+
+function desenharEscadas() {
+  for (const e of escadas) {
+    const yb = andares[e.base].y, yt = andares[e.base + 1].y;
+    ctx.fillStyle = '#5de0ff';
+    ctx.fillRect(e.x - 7, yt - 6, 2, yb - yt + 6);
+    ctx.fillRect(e.x + 5, yt - 6, 2, yb - yt + 6);
+    for (let y = yt + 4; y < yb; y += 8) ctx.fillRect(e.x - 7, y, 14, 2);
+  }
+}
+
+function estrela(x, y, r, cor) {
+  ctx.fillStyle = cor;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const ang = -Math.PI / 2 + i * Math.PI / 5;
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    ctx.lineTo(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function desenharMeta() {
+  // estrela dourada no topo, perto da última escada
+  const y = andares[TOPO].y - 22 + Math.sin(relogio * 3) * 3;
+  estrela(176, y, 11, '#ffd400');
+  texto('TOPO', 176, andares[TOPO].y - 40, 11, '#ffd400');
+}
+
+function desenharBarrilNo(x, y, rot) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.fillStyle = '#b5651d';
+  ctx.beginPath(); ctx.arc(0, 0, RAIO, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#5a3210'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.strokeStyle = '#e0b060'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, RAIO * 0.55, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-RAIO, 0); ctx.lineTo(RAIO, 0); ctx.stroke();
+  ctx.restore();
+}
+
+// Marreta desenhada apontando para cima, com a base da mão em (0,0)
+function formaMarreta() {
+  ctx.fillStyle = '#8a5a2b'; ctx.fillRect(-1.5, -18, 3, 18);   // cabo
+  ctx.fillStyle = '#c9ccd6'; ctx.fillRect(-7, -26, 14, 9);     // cabeça
+  ctx.fillStyle = '#ff4f5e'; ctx.fillRect(-7, -26, 3, 9); ctx.fillRect(4, -26, 3, 9);
+}
+
+// Marretas espalhadas pela torre (flutuam e brilham até serem pegas)
+function desenharMartelos() {
+  for (const m of martelos) {
+    if (m.coletado) continue;
+    const y = andares[m.andar].y - 6 + Math.sin(relogio * 4 + m.x) * 2;
+    ctx.save();
+    ctx.translate(m.x, y);
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#ffd400';
+    ctx.beginPath(); ctx.arc(0, -14, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    formaMarreta();
+    ctx.restore();
+  }
+}
+
+// Pedacinhos de barril voando quando ele é quebrado
+function desenharParticulas() {
+  ctx.fillStyle = '#b5651d';
+  for (const p of particulas) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+}
+
+function desenharVilao() {
+  const levantado = estado === 'jogo' && tempoFerido <= 0 && tempoSpawn < 0.5;
+  ctx.save();
+  ctx.translate(36, andares[TOPO].y);
+  // rabo enrolado
+  ctx.strokeStyle = '#7a4a1e'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(-18, -12); ctx.bezierCurveTo(-40, -14, -42, -36, -28, -38); ctx.stroke();
+  // pernas e pés
+  ctx.fillStyle = '#7a4a1e';
+  ctx.fillRect(-16, -10, 12, 10); ctx.fillRect(4, -10, 12, 10);
+  ctx.fillStyle = '#d9a76a';
+  ctx.fillRect(-18, -4, 14, 4); ctx.fillRect(4, -4, 14, 4);
+  // corpo e barriga
+  ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-20, -38, 40, 30);
+  ctx.fillStyle = '#d9a76a'; ctx.fillRect(-12, -32, 24, 20);
+  // braços longos de macaco
+  ctx.fillStyle = '#8b5a2b';
+  if (levantado) {
+    ctx.fillRect(-30, -64, 8, 30); ctx.fillRect(22, -64, 8, 30);
+    ctx.fillStyle = '#d9a76a'; ctx.fillRect(-31, -68, 10, 6); ctx.fillRect(21, -68, 10, 6);
+    desenharBarrilNo(0, -78, 0);                    // segura o barril antes de jogar
+  } else {
+    ctx.fillRect(-30, -38, 8, 32); ctx.fillRect(22, -38, 8, 32);
+    ctx.fillStyle = '#d9a76a'; ctx.fillRect(-31, -8, 10, 6); ctx.fillRect(21, -8, 10, 6);
+  }
+  // cabeça e orelhas
+  ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-14, -60, 28, 24);
+  ctx.beginPath(); ctx.arc(-16, -48, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(16, -48, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#d9a76a';
+  ctx.beginPath(); ctx.arc(-16, -48, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(16, -48, 3.5, 0, Math.PI * 2); ctx.fill();
+  // rosto
+  ctx.fillRect(-10, -54, 20, 16);
+  ctx.fillStyle = '#fff'; ctx.fillRect(-8, -52, 6, 6); ctx.fillRect(2, -52, 6, 6);
+  ctx.fillStyle = '#000'; ctx.fillRect(-6, -50, 3, 4); ctx.fillRect(3, -50, 3, 4);
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2;      // sobrancelhas bravas
+  ctx.beginPath(); ctx.moveTo(-9, -55); ctx.lineTo(-2, -51); ctx.moveTo(9, -55); ctx.lineTo(2, -51); ctx.stroke();
+  ctx.fillStyle = '#5a3210'; ctx.fillRect(-3, -46, 2, 2); ctx.fillRect(1, -46, 2, 2);   // nariz
+  ctx.fillStyle = '#3a1500'; ctx.fillRect(-6, -42, 12, 4);                              // boca
+  ctx.fillStyle = '#fff'; ctx.fillRect(-5, -42, 3, 2); ctx.fillRect(2, -42, 3, 2);      // dentes
+  ctx.restore();
+}
+
+function desenharHeroi() {
+  const j = jogador;
+  if (invulneravel > 0 && Math.floor(relogio * 12) % 2 === 0) return; // pisca depois de se machucar
+  const f = Math.floor(j.anim) % 2;
+  ctx.save();
+  ctx.translate(j.x, j.y);
+  if (j.estado === 'ferido') {                     // cai de lado quando é atingido
+    const prog = Math.min(1, (1.1 - tempoFerido) * 4);
+    ctx.translate(0, -6);
+    ctx.rotate(-Math.PI / 2 * prog);
+    ctx.translate(0, 6);
+  }
+  if (j.estado === 'escada') {
+    // de frente, braços alternando
+    ctx.fillStyle = '#2b4c9b';
+    ctx.fillRect(-5, -9, 4, f ? 6 : 9); ctx.fillRect(1, -9, 4, f ? 9 : 6);
+    ctx.fillStyle = '#ffb300'; ctx.fillRect(-7, -20, 14, 12);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-7, -15, 14, 2);
+    ctx.fillStyle = '#f4c9a0';
+    ctx.fillRect(-10, f ? -28 : -22, 3, 8); ctx.fillRect(7, f ? -22 : -28, 3, 8);
+    ctx.fillRect(-4, -27, 8, 7);
+    ctx.fillStyle = '#ff7a00'; ctx.fillRect(-6, -32, 12, 6);
+  } else {
+    ctx.scale(j.face, 1);
+    const ar = j.estado === 'ar';
+    ctx.fillStyle = '#2b4c9b';                     // pernas
+    if (ar) { ctx.fillRect(-6, -9, 5, 7); ctx.fillRect(2, -9, 6, 5); }
+    else { ctx.fillRect(-5 + (f ? -1 : 1), -9, 4, 9); ctx.fillRect(1 + (f ? 1 : -1), -9, 4, 9); }
+    ctx.fillStyle = '#ffb300'; ctx.fillRect(-7, -20, 14, 12);   // colete
+    ctx.fillStyle = '#fff'; ctx.fillRect(-7, -15, 14, 2);       // faixa refletiva
+    ctx.fillStyle = '#f4c9a0';                                  // braço
+    if (ar) ctx.fillRect(3, -28, 3, 9); else ctx.fillRect(-1, -19, 3, 8);
+    ctx.fillRect(-4, -27, 8, 7);                                // rosto
+    ctx.fillStyle = '#000'; ctx.fillRect(1, -25, 2, 2);         // olho
+    ctx.fillStyle = '#ff7a00'; ctx.fillRect(-6, -32, 12, 6);    // capacete
+    ctx.fillRect(2, -28, 6, 2);
+    if (martelo > 0) {                               // marreta balançando para frente
+      ctx.save();
+      ctx.translate(5, -16);
+      ctx.rotate(0.6 + Math.sin(relogio * 14) * 0.7);
+      formaMarreta();
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+}
+
+function coracao(x, y, s, cor) {
+  ctx.fillStyle = cor;
+  ctx.beginPath();
+  ctx.moveTo(x, y + s * 0.35);
+  ctx.bezierCurveTo(x, y, x - s * 0.5, y, x - s * 0.5, y + s * 0.3);
+  ctx.bezierCurveTo(x - s * 0.5, y + s * 0.6, x, y + s * 0.8, x, y + s);
+  ctx.bezierCurveTo(x, y + s * 0.8, x + s * 0.5, y + s * 0.6, x + s * 0.5, y + s * 0.3);
+  ctx.bezierCurveTo(x + s * 0.5, y, x, y, x, y + s * 0.35);
+  ctx.fill();
+}
+
+function desenharHUD() {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, L, 46);
+  texto('PONTOS', 12, 17, 12, '#9fb3d9', 'left');
+  texto(String(pontos), 12, 38, 20, '#ffffff', 'left');
+  texto('RECORDE', 150, 17, 12, '#9fb3d9');
+  texto(String(Math.max(recorde, pontos)), 150, 38, 20, '#ffd400');
+  for (let i = 0; i < 3; i++) coracao(L - 22 - i * 24, 12, 20, i < vidas ? '#ff3b4e' : '#3a3f55');
+  if (martelo > 0) {                                 // barrinha do tempo da marreta
+    texto('MARRETA', 12, 62, 11, '#ffb300', 'left');
+    ctx.fillStyle = '#3a3f55'; ctx.fillRect(72, 54, 100, 8);
+    ctx.fillStyle = '#ffb300'; ctx.fillRect(72, 54, 100 * martelo / TEMPO_MARRETA, 8);
+  }
+}
+
+function painel(y, h) {
+  ctx.fillStyle = 'rgba(5,8,20,0.82)';
+  ctx.fillRect(20, y, 320, h);
+  ctx.strokeStyle = '#ffd400'; ctx.lineWidth = 2;
+  ctx.strokeRect(20, y, 320, h);
+}
+
+function desenharTelas() {
+  const piscar = Math.floor(relogio * 2) % 2 === 0;
+  if (estado === 'menu') {
+    painel(130, 380);
+    texto('DONKEY SEST', 180, 190, 38, '#ffd400');
+    texto('Chegue ao topo da torre!', 180, 225, 17, '#ffffff');
+    texto('Fuja dos barris do macaco.', 180, 247, 15, '#9fb3d9');
+    texto('Setas ← →: andar  |  Setas ↑ ↓: escadas', 180, 290, 14, '#ffffff');
+    texto('Espaço: pular', 180, 312, 14, '#ffffff');
+    texto('Celular: arraste para andar e subir,', 180, 338, 13, '#9fb3d9');
+    texto('toque rápido para pular', 180, 356, 13, '#9fb3d9');
+    texto('Pule por cima do barril: +100 pontos', 180, 386, 14, '#5de0ff');
+    texto('Marreta: quebra barris (+300), mas não pula', 180, 410, 13, '#ffb300');
+    texto('Você tem 3 vidas', 180, 440, 14, '#ff6b7a');
+    if (piscar) texto('TOQUE OU ESPAÇO PARA JOGAR', 180, 482, 20, '#ffd400');
+  } else if (estado === 'perdeu') {
+    painel(190, 250);
+    texto('FIM DE JOGO', 180, 245, 34, '#ff3b4e');
+    texto('Pontos: ' + pontos, 180, 295, 22, '#ffffff');
+    texto('Recorde: ' + recorde, 180, 328, 20, '#ffd400');
+    texto('Os barris venceram desta vez!', 180, 365, 14, '#9fb3d9');
+    if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 415, 17, '#ffd400');
+  } else if (estado === 'ganhou') {
+    painel(190, 250);
+    texto('VOCÊ CHEGOU AO TOPO!', 180, 245, 26, '#5de0ff');
+    texto('Pontos: ' + pontos, 180, 295, 22, '#ffffff');
+    texto('Recorde: ' + recorde, 180, 328, 20, '#ffd400');
+    texto('Parabéns, campeão!', 180, 365, 14, '#9fb3d9');
+    if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 415, 17, '#ffd400');
+  }
+}
+
+function desenhar() {
+  ctx.setTransform(escala, 0, 0, escala, 0, 0);
+  ctx.clearRect(0, 0, L, A);
+  ctx.save();
+  if (tremor > 0) ctx.translate((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
+
+  desenharFundo();
+  desenharAndares();
+  desenharEscadas();
+  desenharMeta();
+  desenharMartelos();
+  desenharVilao();
+  for (const b of barris) desenharBarrilNo(b.x, b.y, b.rot);
+  desenharParticulas();
+  if (estado !== 'menu') desenharHeroi();
+  else { jogador.face = 1; desenharHeroi(); }
+
+  for (const p of popups) {                         // textos que sobem e somem
+    ctx.globalAlpha = Math.max(0, 1 - p.t / 1.2);
+    texto(p.txt, p.x, p.y - p.t * 30, 16, '#ffd400');
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+
+  desenharHUD();
+  desenharTelas();
+}
+
+// ---------- Laço principal: roda uns 60 vezes por segundo ----------
+let ultimo = performance.now();
+function quadro(agora) {
+  const dt = Math.min(0.05, (agora - ultimo) / 1000);
+  ultimo = agora;
+  relogio += dt;
+  atualizar(dt);
+  desenhar();
+  requestAnimationFrame(quadro);
+}
+requestAnimationFrame(quadro);
+</script>
+</body>
+</html>
