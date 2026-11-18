@@ -5,11 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Donkey Sest</title>
 <style>
-  /* Fundo escuro e tela centralizada, sem rolagem */
-  html, body { margin: 0; height: 100%; background: #0b0f1a; overflow: hidden;
+  /* A tela do jogo ocupa a janela inteira, sem rolagem */
+  html, body { margin: 0; height: 100%; background: #24105a; overflow: hidden;
                touch-action: none; user-select: none; -webkit-user-select: none; }
-  body { display: flex; align-items: center; justify-content: center; }
-  canvas { display: block; touch-action: none; }
+  canvas { position: fixed; left: 0; top: 0; display: block; touch-action: none; }
 </style>
 </head>
 <body>
@@ -20,43 +19,64 @@
 // =====================================================
 
 // ---------- Tamanho do jogo ----------
-// O jogo "pensa" em 360 x 640 (formato de celular em pé).
-// A função ajustarTela estica isso para caber em qualquer tela.
-const L = 360, A = 640;
+// O "mundo" do jogo mede 360 x 740. A tela inteira é usada: o mundo é
+// aumentado ou diminuído para caber no aparelho (celular, tablet ou computador)
+// e o cenário (céu, cidade e chão) continua além das bordas da torre.
+const L = 360, A = 740;
 const tela = document.getElementById('tela');
 const ctx = tela.getContext('2d');
-let escala = 1;
+let dpr = 1, esc = 1, ox = 0, oy = 0;      // zoom e posição do mundo na tela
+let vx0 = 0, vx1 = L, vy0 = 0, vy1 = A;    // parte do mundo que aparece na tela
 
 function ajustarTela() {
-  const dpr = window.devicePixelRatio || 1;
-  const e = Math.min(window.innerWidth / L, window.innerHeight / A);
-  tela.style.width = (L * e) + 'px';
-  tela.style.height = (A * e) + 'px';
-  tela.width = Math.round(L * e * dpr);
-  tela.height = Math.round(A * e * dpr);
-  escala = tela.width / L;
+  dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth, h = window.innerHeight;
+  tela.style.width = w + 'px';
+  tela.style.height = h + 'px';
+  tela.width = Math.round(w * dpr);
+  tela.height = Math.round(h * dpr);
+  esc = Math.min(w / L, h / A);             // quanto o mundo cresce ou encolhe
+  ox = (w - L * esc) / 2;                   // centraliza o mundo na tela
+  oy = (h - A * esc) / 2;
+  vx0 = -ox / esc; vx1 = (w - ox) / esc;
+  vy0 = -oy / esc; vy1 = (h - oy) / esc;
 }
 window.addEventListener('resize', ajustarTela);
+window.addEventListener('orientationchange', ajustarTela);
 ajustarTela();
 
+// Converte a posição do dedo/mouse na tela para a posição dentro do mundo do jogo
+function paraMundo(e) {
+  const r = tela.getBoundingClientRect();
+  return { x: (e.clientX - r.left - ox) / esc, y: (e.clientY - r.top - oy) / esc };
+}
+
 // ---------- Números do jogo (mude aqui para ajustar a dificuldade) ----------
-const RAIO = 9;          // tamanho do barril
-const VEL = 85;          // velocidade do herói andando
-const VEL_ESCADA = 60;   // velocidade do herói na escada
-const GRAVIDADE = 900;   // quão rápido as coisas caem
-const FORCA_PULO = 330;  // força do pulo
-const TEMPO_MARRETA = 8; // segundos de marreta depois de pegar uma
+const RAIO = 9;                // tamanho do barril
+const VEL = 85;                // velocidade do herói andando
+const VEL_ESCADA = 60;         // velocidade do herói na escada
+const GRAVIDADE = 900;         // quão rápido as coisas caem
+const FORCA_PULO = 330;        // força do pulo
+const TEMPO_MARRETA = 8;       // segundos de marreta depois de pegar uma
+const INTERVALO_FURIA = 15;    // de quantos em quantos segundos o macaco enfurece
+const DURACAO_FURIA = 4;       // quanto tempo a fúria dura
+const VEL_GARRAFA = 190;       // velocidade da garrafa flamejante
+const DURACAO_BANANA = 3.5;    // duração do ataque de bananas (arremesso + animação do macaco)
+const VIDA_BANANA = 12;        // segundos que a banana fica no chão antes de sumir
+const MAX_BANANAS = 5;         // máximo de bananas no cenário ao mesmo tempo
 
 // ---------- A torre ----------
 // Cada andar: y = altura do chão, x1/x2 = onde começa e termina,
 // dir = para que lado os barris rolam (em direção ao buraco).
 const andares = [
-  { y: 600, x1: 0,  x2: 360, dir: -1 }, // 0 = chão
-  { y: 510, x1: 0,  x2: 300, dir:  1 },
-  { y: 420, x1: 60, x2: 360, dir: -1 },
-  { y: 330, x1: 0,  x2: 300, dir:  1 },
-  { y: 240, x1: 60, x2: 360, dir: -1 },
-  { y: 150, x1: 0,  x2: 200, dir:  1 }  // 5 = topo (o vilão fica aqui)
+  { y: 700, x1: 0,  x2: 360, dir: -1 }, // 0 = chão
+  { y: 620, x1: 0,  x2: 300, dir:  1 },
+  { y: 540, x1: 60, x2: 360, dir: -1 },
+  { y: 460, x1: 0,  x2: 300, dir:  1 },
+  { y: 380, x1: 60, x2: 360, dir: -1 },
+  { y: 300, x1: 0,  x2: 300, dir:  1 },
+  { y: 220, x1: 60, x2: 360, dir: -1 },
+  { y: 140, x1: 0,  x2: 200, dir:  1 }  // 7 = topo (o vilão fica aqui)
 ];
 const TOPO = andares.length - 1;
 
@@ -66,23 +86,29 @@ const escadas = [
   { x: 120, base: 1 }, { x: 270, base: 1 },
   { x: 240, base: 2 }, { x: 90,  base: 2 },
   { x: 100, base: 3 }, { x: 260, base: 3 },
-  { x: 150, base: 4 }
+  { x: 240, base: 4 }, { x: 90,  base: 4 },
+  { x: 120, base: 5 }, { x: 270, base: 5 },
+  { x: 150, base: 6 }
 ];
 
 // ---------- Estado do jogo ----------
 let estado = 'menu';   // menu, jogo, perdeu ou ganhou
-let jogador, barris, popups, martelos, particulas;
+let jogador, barris, popups, martelos, particulas, bananas, garrafas, coracaoVida;
+let vilao;             // o macaco: modo 'normal', 'banana' ou 'furia'
 let vidas, pontos, recorde = 0, andarMax;
 let tempoJogo, tempoSpawn, tremor, tempoFerido, invulneravel;
+let tempoBanana, tempoFuria;   // contagens regressivas dos ataques do macaco
 let martelo = 0;       // segundos de marreta que ainda restam
 let relogio = 0;       // relógio geral (para animações)
 let bloqueio = 0;      // evita recomeçar sem querer logo após o fim
+let pausado = false;   // jogo pausado?
+let opcaoPausa = 0;    // opção marcada no menu de pausa (0 = continuar, 1 = reiniciar)
 
 try { recorde = parseInt(localStorage.getItem('donkeySestRecorde')) || 0; } catch (e) {}
 
 function novoJogador() {
   return { x: 180, y: andares[0].y, vx: 0, vy: 0, andar: 0,
-           estado: 'chao', face: 1, anim: 0, escada: null };
+           estado: 'chao', face: 1, anim: 0, escada: null, tEsc: 0, alvoX: 0 };
 }
 
 // Zera tudo para começar uma partida nova
@@ -91,6 +117,8 @@ function preparar() {
   barris = [];
   popups = [];
   particulas = [];
+  bananas = [];
+  garrafas = [];
   martelo = 0;
   // 3 marretas espalhadas pela torre (andar e posição)
   martelos = [
@@ -98,6 +126,11 @@ function preparar() {
     { andar: 2, x: 320, coletado: false },
     { andar: 4, x: 290, coletado: false }
   ];
+  // 1 coração de vida extra (só pode ser pego uma vez)
+  coracaoVida = { andar: 5, x: 40, coletado: false };
+  vilao = { modo: 'normal', t: 0, lancados: 0 };
+  tempoBanana = 5;
+  tempoFuria = INTERVALO_FURIA;
   vidas = 3;
   pontos = 0;
   andarMax = 0;
@@ -106,6 +139,8 @@ function preparar() {
   tremor = 0;
   tempoFerido = 0;
   invulneravel = 0;
+  pausado = false;
+  opcaoPausa = 0;
 }
 preparar();
 
@@ -114,32 +149,90 @@ function iniciar() {
   if (estado !== 'jogo') { preparar(); estado = 'jogo'; }
 }
 
+// ---------- Pausa ----------
+const botaoPausa = { x: 188, y: 9, w: 62, h: 28 };           // botão PAUSE no topo
+const botoesPausa = [                                         // botões do menu de pausa
+  { x: 60, y: 365, w: 240, h: 44, txt: 'CONTINUAR JOGO' },
+  { x: 60, y: 421, w: 240, h: 44, txt: 'REINICIAR PARTIDA' }
+];
+
+function pausar() {
+  if (estado !== 'jogo' || pausado) return;
+  pausado = true;
+  opcaoPausa = 0;
+  pedidoPulo = false;                 // limpa qualquer comando que estava pendente
+  ponteiro = null;
+  toque.esq = toque.dir = toque.cima = toque.baixo = toque.cimaBorda = false;
+}
+function continuar() { pausado = false; }
+function reiniciar() { preparar(); estado = 'jogo'; }        // preparar() já tira da pausa
+function escolherPausa(i) { if (i === 0) continuar(); else reiniciar(); }
+
+function dentro(p, r, margem) {
+  margem = margem || 0;
+  return p.x >= r.x - margem && p.x <= r.x + r.w + margem &&
+         p.y >= r.y - margem && p.y <= r.y + r.h + margem;
+}
+function opcaoEm(p) {                 // qual botão do menu de pausa está sob o dedo/mouse
+  for (let i = 0; i < botoesPausa.length; i++) if (dentro(p, botoesPausa[i], 0)) return i;
+  return -1;
+}
+
 // ---------- Controles ----------
 const teclas = {};
 const toque = { esq: false, dir: false, cima: false, baixo: false, cimaBorda: false };
 let pedidoPulo = false;
 let ponteiro = null;
 
+// Nome da tecla: letras pelo código físico (funciona mesmo com Caps Lock ligado)
+function nomeTecla(e) {
+  if (e.key === ' ') return 'Space';
+  if (e.code && e.code.indexOf('Key') === 0) return e.code;   // KeyW, KeyA, KeyS, KeyD, KeyP
+  return e.key;
+}
+
 window.addEventListener('keydown', function (e) {
-  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) e.preventDefault();
-  if (!teclas[e.key] && (e.key === ' ' || e.key === 'Enter')) {
-    if (estado === 'jogo') pedidoPulo = true; else iniciar();
+  const k = nomeTecla(e);
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(k)) e.preventDefault();
+  const primeira = !teclas[k];          // só reage na primeira vez (ignora tecla segurada)
+  teclas[k] = true;
+  if (!primeira) return;
+  if (pausado) {                        // no menu de pausa: W/S ou setas escolhem, Enter confirma
+    if (k === 'ArrowUp' || k === 'KeyW') opcaoPausa = 0;      // (Espaço não confirma, para não retomar sem querer)
+    else if (k === 'ArrowDown' || k === 'KeyS') opcaoPausa = 1;
+    else if (k === 'Enter') escolherPausa(opcaoPausa);
+    return;
   }
-  teclas[e.key] = true;
+  if (estado === 'jogo') {
+    if (k === 'Space' || k === 'Enter' || k === 'KeyW') pedidoPulo = true;   // W também pula
+    else if (k === 'KeyP' || k === 'Escape') pausar();
+  } else if (k === 'Space' || k === 'Enter') iniciar();
 });
-window.addEventListener('keyup', function (e) { teclas[e.key] = false; });
+window.addEventListener('keyup', function (e) { teclas[nomeTecla(e)] = false; });
 window.addEventListener('blur', function () { for (const k in teclas) teclas[k] = false; });
 
 // Toque / mouse: arrastar anda e sobe; toque rápido pula
 tela.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 tela.addEventListener('pointerdown', function (e) {
   e.preventDefault();
+  const p = paraMundo(e);
+  if (pausado) {                                   // menu de pausa: só os botões funcionam
+    const o = opcaoEm(p);
+    if (o >= 0) escolherPausa(o);
+    return;
+  }
+  if (estado === 'jogo' && dentro(p, botaoPausa, 8)) { pausar(); return; }
   if (estado !== 'jogo') { iniciar(); return; }
   if (ponteiro && e.pointerId !== ponteiro.id) { pedidoPulo = true; return; } // 2º dedo = pulo
   try { tela.setPointerCapture(e.pointerId); } catch (err) {}
   ponteiro = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moveu: false };
 });
 tela.addEventListener('pointermove', function (e) {
+  if (pausado) {                                   // passar o mouse sobre um botão marca a opção
+    const o = opcaoEm(paraMundo(e));
+    if (o >= 0) opcaoPausa = o;
+    return;
+  }
   if (!ponteiro || e.pointerId !== ponteiro.id) return;
   const dx = e.clientX - ponteiro.x0, dy = e.clientY - ponteiro.y0;
   if (Math.hypot(dx, dy) > 12) ponteiro.moveu = true;
@@ -152,7 +245,7 @@ tela.addEventListener('pointermove', function (e) {
 });
 function fimToque(e) {
   if (!ponteiro || e.pointerId !== ponteiro.id) return;
-  if (!ponteiro.moveu && performance.now() - ponteiro.t0 < 300 && estado === 'jogo') pedidoPulo = true;
+  if (!ponteiro.moveu && performance.now() - ponteiro.t0 < 300 && estado === 'jogo' && !pausado) pedidoPulo = true;
   ponteiro = null;
   toque.esq = toque.dir = toque.cima = toque.baixo = false;
 }
@@ -164,6 +257,18 @@ function escadaPerto(x, base) {
   return escadas.find(function (e) { return e.base === base && Math.abs(e.x - x) <= 10; });
 }
 
+// Retângulo do corpo do herói e área de golpe da marreta (um pouco à frente dele)
+function heroiRet() {
+  const j = jogador;
+  return { l: j.x - 6, r: j.x + 6, t: j.y - 26, b: j.y - 1 };
+}
+function zonaMarreta() {
+  const j = jogador;
+  const x2 = j.x + j.face * 28;
+  return { l: Math.min(j.x - 7, x2), r: Math.max(j.x + 7, x2), t: j.y - 38, b: j.y };
+}
+function sobrepoe(a, b) { return a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t; }
+
 function jogarBarril() {
   barris.push({ x: 78, y: andares[TOPO].y - RAIO, vx: 0, vy: 0, dir: 1,
                 andar: TOPO, caindo: false, rot: 0, pontuou: false });
@@ -171,10 +276,11 @@ function jogarBarril() {
 
 function atualizarJogador(dt) {
   const j = jogador;
-  const esq = teclas['ArrowLeft'] || toque.esq;
-  const dir = teclas['ArrowRight'] || toque.dir;
-  const cima = teclas['ArrowUp'] || toque.cima;
-  const baixo = teclas['ArrowDown'] || toque.baixo;
+  // setas e WASD fazem a mesma coisa
+  const esq = teclas['ArrowLeft'] || teclas['KeyA'] || toque.esq;
+  const dir = teclas['ArrowRight'] || teclas['KeyD'] || toque.dir;
+  const cima = teclas['ArrowUp'] || teclas['KeyW'] || toque.cima;
+  const baixo = teclas['ArrowDown'] || teclas['KeyS'] || toque.baixo;
 
   if (j.estado === 'chao') {
     // andar para os lados
@@ -186,14 +292,14 @@ function atualizarJogador(dt) {
     const a = andares[j.andar];
     j.x = Math.max(a.x1 + 7, Math.min(a.x2 - 7, j.x));
 
+    // subir/descer escada e pular (funciona igual com ou sem a marreta)
     const subir = escadaPerto(j.x, j.andar);
     const descer = j.andar > 0 ? escadaPerto(j.x, j.andar - 1) : null;
-    const forte = martelo > 0; // com a marreta na mão não dá para subir nem pular
-    if (cima && subir && !forte) {
+    if (cima && subir) {
       j.estado = 'escada'; j.escada = subir; j.x = subir.x;
-    } else if (baixo && descer && !forte) {
+    } else if (baixo && descer) {
       j.estado = 'escada'; j.escada = descer; j.x = descer.x;
-    } else if (!forte && (pedidoPulo || (toque.cimaBorda && !subir))) {
+    } else if (pedidoPulo || (toque.cimaBorda && !subir)) {
       j.estado = 'ar'; j.vy = -FORCA_PULO; j.vx = m * VEL;
     }
   } else if (j.estado === 'ar') {
@@ -217,6 +323,32 @@ function atualizarJogador(dt) {
       if (j.andar === TOPO) ganhar();
     } else if (j.y >= yBase) {     // voltou para o andar de baixo
       j.y = yBase; j.estado = 'chao'; j.andar = j.escada.base;
+    }
+  } else if (j.estado === 'escorrega') {
+    // pisou na banana: perde o controle e desliza para frente
+    j.tEsc += dt;
+    const a = andares[j.andar];
+    j.x += j.face * 90 * dt;
+    j.x = Math.max(a.x1 + 7, Math.min(a.x2 - 7, j.x));
+    if (j.tEsc >= 0.6) {
+      if (j.andar > 0) {           // existe andar embaixo: cai para ele
+        const baixoA = andares[j.andar - 1];
+        j.alvoX = Math.max(baixoA.x1 + 7, Math.min(baixoA.x2 - 7, j.x));
+        j.estado = 'queda'; j.vy = 0;
+      } else {                     // já está no chão: só levanta
+        j.estado = 'chao';
+      }
+    }
+  } else if (j.estado === 'queda') {
+    // caindo para o andar imediatamente inferior
+    const baixoA = andares[j.andar - 1];
+    const dx = j.alvoX - j.x;
+    j.x += Math.sign(dx) * Math.min(Math.abs(dx), 200 * dt);
+    j.vy += GRAVIDADE * dt;
+    j.y += j.vy * dt;
+    if (j.y >= baixoA.y) {
+      j.y = baixoA.y; j.vy = 0; j.x = j.alvoX; j.andar -= 1; j.estado = 'chao';
+      tremor = 0.15;
     }
   }
 }
@@ -260,7 +392,8 @@ function atualizarBarris(dt) {
   }
 }
 
-// Verifica se o barril encostou num retângulo (folga positiva = mais generoso)
+// Verifica se um círculo (barril ou garrafa) encostou num retângulo
+// (folga positiva = mais generoso, negativa = mais difícil de acertar)
 function colide(b, r, folga) {
   const cx = Math.max(r.l, Math.min(b.x, r.r));
   const cy = Math.max(r.t, Math.min(b.y, r.b));
@@ -269,24 +402,27 @@ function colide(b, r, folga) {
   return dx * dx + dy * dy < raio * raio;
 }
 
+// Pedacinhos voando quando algo é quebrado
+function estilhacos(x, y, cor) {
+  for (let k = 0; k < 8; k++) {
+    particulas.push({ x: x, y: y, vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 140, t: 0, cor: cor });
+  }
+}
+
 // Quebra um barril com a marreta: pontos, textinho e pedacinhos voando
 function destruir(i) {
   const b = barris[i];
   pontos += 300;
   popups.push({ x: b.x, y: b.y - 14, txt: '+300', t: 0 });
-  for (let k = 0; k < 8; k++) {
-    particulas.push({ x: b.x, y: b.y, vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 140, t: 0 });
-  }
+  estilhacos(b.x, b.y, '#b5651d');
   barris.splice(i, 1);
 }
 
 function verificarBarris() {
   const j = jogador;
-  const r = { l: j.x - 6, r: j.x + 6, t: j.y - 26, b: j.y - 1 };
+  const r = heroiRet();
   const forte = martelo > 0;
-  // área da marreta: um pouco à frente do herói
-  const x2 = j.x + j.face * 28;
-  const zona = { l: Math.min(j.x - 7, x2), r: Math.max(j.x + 7, x2), t: j.y - 38, b: j.y };
+  const zona = zonaMarreta();
   for (let i = barris.length - 1; i >= 0; i--) {
     const b = barris[i];
     if (forte) {                       // com a marreta nenhum barril machuca: todos quebram
@@ -311,6 +447,19 @@ function ferido() {
   jogador.estado = 'ferido';
 }
 
+// Dano da garrafa flamejante: perde 1 vida mas fica no mesmo lugar (sem reiniciar a fase)
+function danoFogo() {
+  vidas -= 1;
+  tremor = 0.4;
+  popups.push({ x: jogador.x, y: jogador.y - 40, txt: '-1 VIDA', t: 0 });
+  if (vidas <= 0) {                    // era a última vida: fim de jogo
+    tempoFerido = 1.1;
+    jogador.estado = 'ferido';
+  } else {
+    invulneravel = 1.5;                // pisca um pouco e não leva dano de novo na mesma hora
+  }
+}
+
 function ganhar() {
   const bonus = Math.max(0, Math.round(1000 - tempoJogo * 8)); // quanto mais rápido, mais pontos
   pontos += bonus;
@@ -331,7 +480,8 @@ function salvarRecorde() {
 function pegarMarretas() {
   const j = jogador;
   for (const m of martelos) {
-    if (!m.coletado && j.andar === m.andar && j.estado !== 'escada' && Math.abs(j.x - m.x) < 12) {
+    if (!m.coletado && j.andar === m.andar && j.estado !== 'escada' && j.estado !== 'queda' &&
+        Math.abs(j.x - m.x) < 12) {
       m.coletado = true;
       martelo = TEMPO_MARRETA;
       popups.push({ x: j.x, y: j.y - 40, txt: 'MARRETA!', t: 0 });
@@ -339,7 +489,157 @@ function pegarMarretas() {
   }
 }
 
+// Pega o coração de vida extra (só uma vez)
+function pegarCoracao() {
+  const c = coracaoVida, j = jogador;
+  if (c.coletado || j.estado === 'queda' || j.estado === 'ferido') return;
+  const yc = andares[c.andar].y;
+  const area = { l: c.x - 10, r: c.x + 10, t: yc - 34, b: yc - 8 };
+  if (sobrepoe(heroiRet(), area)) {
+    c.coletado = true;                 // some do mapa e não dá vida de novo
+    vidas += 1;
+    popups.push({ x: c.x, y: yc - 40, txt: '+1 VIDA', t: 0 });
+  }
+}
+
+// ---------- Ataque de bananas ----------
+// O macaco joga uma banana que voa até um ponto do cenário e fica no chão.
+function lancarBanana() {
+  let alvoA = 0, alvoX = 180;
+  for (let n = 0; n < 12; n++) {       // sorteia andar e posição (longe do herói)
+    alvoA = Math.floor(Math.random() * TOPO);          // andares 0 até TOPO-1
+    const a = andares[alvoA];
+    alvoX = a.x1 + 20 + Math.random() * (a.x2 - a.x1 - 40);
+    if (!(alvoA === jogador.andar && Math.abs(alvoX - jogador.x) < 45)) break;
+  }
+  const x0 = 62, y0 = andares[TOPO].y - 70;            // mão do macaco
+  bananas.push({ estado: 'voo', t: 0, x0: x0, y0: y0, xt: alvoX, yt: andares[alvoA].y,
+                 x: x0, y: y0, andar: alvoA, vida: VIDA_BANANA, rot: 0 });
+  if (bananas.length > MAX_BANANAS) bananas.shift();   // a mais antiga some
+}
+
+function atualizarBananas(dt) {
+  for (let i = bananas.length - 1; i >= 0; i--) {
+    const b = bananas[i];
+    if (b.estado === 'voo') {
+      b.t += dt / 0.9;                                  // voo dura 0,9 s
+      const u = Math.min(1, b.t);
+      b.x = b.x0 + (b.xt - b.x0) * u;
+      b.y = b.y0 + (b.yt - b.y0) * u - 90 * 4 * u * (1 - u);   // curva no ar
+      b.rot += dt * 12;
+      if (u >= 1) { b.estado = 'chao'; b.x = b.xt; b.y = b.yt; b.rot = 0; }
+    } else {
+      b.vida -= dt;
+      if (b.vida <= 0) bananas.splice(i, 1);
+    }
+  }
+}
+
+// O herói escorrega: perde o controle por um tempo e cai para o andar de baixo (se houver)
+function escorregar() {
+  const j = jogador;
+  j.estado = 'escorrega'; j.tEsc = 0; j.vx = 0; j.vy = 0;
+  j.y = andares[j.andar].y;
+  popups.push({ x: j.x, y: j.y - 40, txt: 'Escorregou!', t: 0 });
+}
+
+function verificarBananas() {
+  const j = jogador;
+  if (j.estado === 'ferido' || j.estado === 'escada' || j.estado === 'escorrega' || j.estado === 'queda') return;
+  const r = heroiRet();
+  const zona = zonaMarreta();
+  for (let i = bananas.length - 1; i >= 0; i--) {
+    const b = bananas[i];
+    if (b.estado !== 'chao') continue;          // banana voando ainda não escorrega ninguém
+    const rb = { l: b.x - 8, r: b.x + 8, t: b.y - 8, b: b.y };
+    if (martelo > 0) {                          // a marreta esmaga a banana
+      if (sobrepoe(zona, rb) || sobrepoe(r, rb)) { estilhacos(b.x, b.y - 4, '#ffd23a'); bananas.splice(i, 1); }
+      continue;
+    }
+    if (sobrepoe(r, rb)) {                      // pulando por cima, o herói não encosta
+      bananas.splice(i, 1);                     // a banana some (um contato = um escorregão)
+      escorregar();
+      return;
+    }
+  }
+}
+
+// ---------- Garrafas flamejantes (fúria) ----------
+// A direção é calculada UMA vez, na hora do arremesso: a garrafa não persegue o herói.
+function lancarGarrafa() {
+  const j = jogador;
+  const x0 = 62, y0 = andares[TOPO].y - 70;             // mão do macaco
+  const dx = j.x - x0, dy = (j.y - 16) - y0;            // direção até onde o herói está AGORA
+  const d = Math.hypot(dx, dy) || 1;
+  garrafas.push({ x: x0, y: y0, vx: dx / d * VEL_GARRAFA, vy: dy / d * VEL_GARRAFA, rot: 0 });
+}
+
+function atualizarGarrafas(dt) {
+  for (let i = garrafas.length - 1; i >= 0; i--) {
+    const g = garrafas[i];
+    g.x += g.vx * dt;
+    g.y += g.vy * dt;
+    g.rot += dt * 10;
+    if (g.x < -60 || g.x > L + 60 || g.y < -80 || g.y > A + 60) garrafas.splice(i, 1);
+  }
+}
+
+function verificarGarrafas() {
+  const j = jogador;
+  if (j.estado === 'ferido') return;
+  const r = heroiRet();
+  const zona = zonaMarreta();
+  for (let i = garrafas.length - 1; i >= 0; i--) {
+    const g = garrafas[i];
+    if (martelo > 0) {                                  // a marreta também quebra a garrafa
+      if (colide(g, zona, -2) || colide(g, r, -2)) {
+        pontos += 300;
+        popups.push({ x: g.x, y: g.y - 14, txt: '+300', t: 0 });
+        estilhacos(g.x, g.y, '#ff9a2e');
+        garrafas.splice(i, 1);
+      }
+      continue;
+    }
+    if (invulneravel <= 0 && colide(g, r, -2)) {
+      garrafas.splice(i, 1);                            // a garrafa some: uma batida = um dano só
+      danoFogo();
+      return;
+    }
+  }
+}
+
+// ---------- O macaco: fúria e ataque de bananas ----------
+function atualizarVilao(dt) {
+  const v = vilao;
+  tempoFuria -= dt;
+  if (tempoFuria <= 0 && v.modo !== 'furia') {          // hora de enfurecer (a cada 15 s)
+    v.modo = 'furia'; v.t = 0; v.lancados = 0;
+    tempoFuria += INTERVALO_FURIA;
+  }
+  if (v.modo === 'furia') {
+    v.t += dt;
+    if (v.lancados === 0 && v.t >= 1.0) { lancarGarrafa(); v.lancados = 1; }   // 1ª garrafa
+    if (v.lancados === 1 && v.t >= 2.5) { lancarGarrafa(); v.lancados = 2; }   // 2ª garrafa
+    if (v.t >= DURACAO_FURIA) { v.modo = 'normal'; v.t = 0; }                 // 4 s: acabou
+  } else if (v.modo === 'banana') {
+    v.t += dt;
+    if (v.lancados === 0 && v.t >= 0.35) { lancarBanana(); v.lancados = 1; }
+    if (v.lancados === 1 && v.t >= 0.65) { lancarBanana(); v.lancados = 2; }
+    if (v.t >= DURACAO_BANANA) {                        // terminou de comer
+      v.modo = 'normal'; v.t = 0;
+      tempoBanana = 6 + Math.random() * 3;
+    }
+  } else {
+    if (tempoBanana > 0) tempoBanana -= dt;
+    // só começa o ataque de bananas se der tempo de terminar antes da próxima fúria
+    if (tempoBanana <= 0 && tempoFuria > DURACAO_BANANA + 0.3) {
+      v.modo = 'banana'; v.t = 0; v.lancados = 0;
+    }
+  }
+}
+
 function atualizar(dt) {
+  if (pausado) return;                 // pausado: nada se mexe e nenhum tempo corre
   for (const p of popups) p.t += dt;
   popups = popups.filter(function (p) { return p.t < 1.2; });
   for (const p of particulas) { p.t += dt; p.vy += 600 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
@@ -349,6 +649,10 @@ function atualizar(dt) {
 
   tempoJogo += dt;
   if (invulneravel > 0) invulneravel -= dt;
+
+  atualizarVilao(dt);
+  atualizarBananas(dt);
+  atualizarGarrafas(dt);
 
   if (tempoFerido > 0) {
     // herói caiu: espera um pouco e volta ao início
@@ -361,23 +665,30 @@ function atualizar(dt) {
       } else {
         jogador = novoJogador();
         barris = [];
+        bananas = [];
+        garrafas = [];
         invulneravel = 1.5;
         tempoSpawn = 1.2;
       }
     }
   } else {
-    // o vilão joga barris cada vez mais seguidos
-    tempoSpawn -= dt;
-    if (tempoSpawn <= 0) {
-      jogarBarril();
-      tempoSpawn = Math.max(1.1, 2.6 - 0.25 * andarMax) + Math.random() * 0.6;
+    // o vilão joga barris cada vez mais seguidos (menos quando está ocupado com bananas ou fúria)
+    if (vilao.modo === 'normal') {
+      tempoSpawn -= dt;
+      if (tempoSpawn <= 0) {
+        jogarBarril();
+        tempoSpawn = Math.max(1.1, 2.6 - 0.25 * andarMax) + Math.random() * 0.6;
+      }
     }
     atualizarJogador(dt);
     if (martelo > 0) martelo = Math.max(0, martelo - dt);
     pegarMarretas();
+    pegarCoracao();
     if (estado === 'jogo') {
       atualizarBarris(dt);
       verificarBarris();
+      verificarBananas();
+      verificarGarrafas();
     }
   }
   pedidoPulo = false;
@@ -395,13 +706,14 @@ function texto(t, x, y, tam, cor, alinhar) {
   ctx.fillText(t, x, y);
 }
 
-// Prédios da cidade: gerados uma vez só (números "aleatórios" fixos, sempre iguais)
+// Prédios da cidade: gerados uma vez só (números "aleatórios" fixos, sempre iguais).
+// Cobrem uma faixa bem larga, para o cenário continuar nas laterais em telas largas.
 function gerarPredios(semente, alturaMin, alturaMax, larguraMin) {
   let s = semente;
   function aleatorio() { s = (s * 16807) % 2147483647; return s / 2147483647; }
   const lista = [];
-  let x = -10;
-  while (x < L) {
+  let x = -1500;
+  while (x < 1860) {
     const w = larguraMin + Math.floor(aleatorio() * 26);
     const h = alturaMin + Math.floor(aleatorio() * (alturaMax - alturaMin));
     const luzes = [];
@@ -416,12 +728,13 @@ function gerarPredios(semente, alturaMin, alturaMax, larguraMin) {
   }
   return lista;
 }
-const prediosFundo = gerarPredios(11, 90, 260, 16);   // prédios de trás (mais claros)
-const prediosFrente = gerarPredios(7, 130, 340, 20);  // prédios da frente (mais escuros)
+const prediosFundo = gerarPredios(11, 180, 430, 16);   // prédios de trás (mais claros)
+const prediosFrente = gerarPredios(7, 240, 560, 20);   // prédios da frente (mais escuros)
 
 function desenharPredios(lista, cor, alpha) {
   for (const p of lista) {
-    const topo = 610 - p.h;
+    if (p.x + p.w < vx0 - 10 || p.x > vx1 + 10) continue;   // só desenha o que aparece na tela
+    const topo = 710 - p.h;
     ctx.fillStyle = cor;
     ctx.fillRect(p.x, topo, p.w, p.h);
     if (p.antena) ctx.fillRect(p.x + Math.floor(p.w / 2), topo - p.antena, 2, p.antena);
@@ -442,31 +755,33 @@ function nuvem(x, y, w) {
 }
 
 function desenharFundo() {
-  // céu roxo que vira rosa perto do chão
-  const g = ctx.createLinearGradient(0, 0, 0, 610);
+  const largura = vx1 - vx0 + 20;
+  // céu roxo que vira rosa perto do chão (cobre toda a tela)
+  const g = ctx.createLinearGradient(0, 0, 0, 710);
   g.addColorStop(0, '#24105a');
   g.addColorStop(0.5, '#4a2397');
   g.addColorStop(0.85, '#c0489f');
   g.addColorStop(1, '#ff7cc0');
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, L, A);
+  ctx.fillRect(vx0 - 10, vy0 - 10, largura, vy1 - vy0 + 20);
   // listras horizontais no céu
   ctx.fillStyle = 'rgba(190,150,255,0.14)';
-  for (let y = 200; y < 600; y += 22) ctx.fillRect(0, y, L, 4 + (y - 200) / 60);
+  for (let y = 260; y < 700; y += 22) ctx.fillRect(vx0 - 10, y, largura, 4 + (y - 260) / 60);
   // nuvens devagarinho para o lado
-  const nuvens = [[20, 120, 70], [190, 170, 90], [260, 90, 60], [90, 260, 80]];
-  for (const n of nuvens) nuvem(((n[0] + relogio * 5) % (L + 140)) - 90, n[1], n[2]);
+  const nuvens = [[20, 130, 70], [190, 190, 90], [260, 100, 60], [90, 300, 80], [300, 420, 70], [40, 520, 64]];
+  const faixa = (vx1 - vx0) + 160;
+  for (const n of nuvens) nuvem(((n[0] * faixa / L + relogio * 5) % faixa) + vx0 - 90, n[1], n[2]);
   // cidade
   desenharPredios(prediosFundo, '#33206e', 0.5);
   desenharPredios(prediosFrente, '#150b32', 0.9);
   // chão de pedras roxas
   ctx.fillStyle = '#2b2158';
-  ctx.fillRect(0, 610, L, 30);
+  ctx.fillRect(vx0 - 10, 710, largura, vy1 - 710 + 10);
   ctx.fillStyle = '#9b5cff';
-  ctx.fillRect(0, 610, L, 4);
+  ctx.fillRect(vx0 - 10, 710, largura, 4);
   ctx.fillStyle = '#41367d';
-  for (let y = 618; y < 640; y += 10) {
-    for (let x = ((y / 10) % 2) * 10; x < L; x += 20) ctx.fillRect(x, y, 16, 7);
+  for (let y = 718, linha = 0; y < vy1 + 10; y += 10, linha++) {
+    for (let x = Math.floor((vx0 - 20) / 20) * 20 + (linha % 2) * 10; x < vx1 + 20; x += 20) ctx.fillRect(x, y, 16, 7);
   }
 }
 
@@ -504,11 +819,56 @@ function estrela(x, y, r, cor) {
   ctx.fill();
 }
 
+// Uma banana (centro em 0,0), usada no baú, no chão, no ar e na mão do macaco
+function bananaForma() {
+  ctx.fillStyle = '#ffd23a';
+  ctx.strokeStyle = '#a8780a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-8, -3);
+  ctx.quadraticCurveTo(0, 12, 9, -5);     // lado de baixo (curvo)
+  ctx.quadraticCurveTo(0, 2, -8, -3);     // lado de cima
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#5a3a10';              // pontinhas marrons
+  ctx.fillRect(8, -7, 2, 3);
+  ctx.fillRect(-9, -4, 2, 2);
+}
+
+// Baú de madeira cheio de bananas (o prêmio no topo)
+function desenharBau(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = 0.18 + 0.08 * Math.sin(relogio * 4);   // brilho dourado atrás
+  ctx.fillStyle = '#ffd400';
+  ctx.beginPath(); ctx.arc(0, -20, 26, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#6b3d14';                                // tampa aberta (atrás)
+  ctx.beginPath(); ctx.moveTo(-17, -16); ctx.lineTo(-14, -32); ctx.lineTo(14, -32); ctx.lineTo(17, -16); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ffd400'; ctx.fillRect(-14, -33, 28, 2);
+  const monte = [[-10, -20, -0.5], [-3, -25, 0.2], [5, -22, 0.9], [11, -19, -1.2], [1, -19, 0.1]];
+  for (const p of monte) {                                  // bananas aparecendo
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(p[2]); ctx.scale(1.15, 1.15); bananaForma(); ctx.restore();
+  }
+  ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-17, -16, 34, 16);   // corpo do baú
+  ctx.fillStyle = '#6b3d14'; ctx.fillRect(-17, -9, 34, 2);
+  ctx.fillStyle = '#ffd400';                                    // ferragens douradas
+  ctx.fillRect(-17, -16, 34, 3); ctx.fillRect(-17, -3, 34, 3);
+  ctx.fillRect(-17, -16, 3, 16); ctx.fillRect(14, -16, 3, 16);
+  ctx.fillRect(-4, -14, 8, 8);                                  // fechadura
+  ctx.fillStyle = '#3a2000'; ctx.fillRect(-1, -11, 2, 4);
+  const b1 = Math.sin(relogio * 5) * 0.5 + 0.5, b2 = Math.sin(relogio * 5 + 2) * 0.5 + 0.5;
+  estrela(-20, -34, 2 + 3 * b1, '#fff7b0');                     // brilhos
+  estrela(20, -28, 2 + 3 * b2, '#fff7b0');
+  ctx.restore();
+}
+
 function desenharMeta() {
-  // estrela dourada no topo, perto da última escada
-  const y = andares[TOPO].y - 22 + Math.sin(relogio * 3) * 3;
-  estrela(176, y, 11, '#ffd400');
-  texto('TOPO', 176, andares[TOPO].y - 40, 11, '#ffd400');
+  // baú de bananas no topo, perto da última escada
+  const y = andares[TOPO].y;
+  desenharBau(176, y);
+  texto('TOPO', 176, y - 46, 11, '#ffd400');
 }
 
 function desenharBarrilNo(x, y, rot) {
@@ -547,53 +907,207 @@ function desenharMartelos() {
   }
 }
 
-// Pedacinhos de barril voando quando ele é quebrado
+// Coração de vida extra: flutua e brilha até ser pego
+function desenharCoracaoVida() {
+  const c = coracaoVida;
+  if (c.coletado) return;
+  const yc = andares[c.andar].y;
+  const y = yc - 32 + Math.sin(relogio * 4) * 3;                // flutua
+  ctx.globalAlpha = 0.25 + 0.15 * Math.sin(relogio * 6);        // brilho pulsando
+  ctx.fillStyle = '#ff7aa0';
+  ctx.beginPath(); ctx.arc(c.x, y + 9, 17, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  coracao(c.x, y, 20, '#ff3b4e');
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';                      // reflexo
+  ctx.fillRect(c.x - 6, y + 4, 3, 3);
+  const b = Math.sin(relogio * 7) * 0.5 + 0.5;
+  estrela(c.x + 13, y - 2, 1.5 + 2.5 * b, '#fff7b0');           // brilhinho
+}
+
+// Bananas no ar e no chão
+function desenharBananas() {
+  for (const b of bananas) {
+    if (b.estado === 'chao' && b.vida < 2.5 && Math.floor(relogio * 8) % 2 === 0) continue; // pisca antes de sumir
+    ctx.save();
+    if (b.estado === 'voo') { ctx.translate(b.x, b.y); ctx.rotate(b.rot); }
+    else ctx.translate(b.x, b.y - 5);
+    ctx.scale(1.3, 1.3);
+    bananaForma();
+    ctx.restore();
+  }
+}
+
+// Garrafa com fogo no gargalo (centro em 0,0, gargalo para cima)
+function garrafaForma() {
+  ctx.fillStyle = '#2e9d5f'; ctx.fillRect(-4, -3, 8, 11);        // corpo
+  ctx.fillRect(-2, -8, 4, 6);                                      // gargalo
+  ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.fillRect(-3, -1, 2, 7);  // reflexo
+  ctx.fillStyle = '#f2e6c8'; ctx.fillRect(-3, -9, 6, 2);           // pano
+  const f = 1 + 0.25 * Math.sin(relogio * 40);                     // chama tremendo
+  ctx.fillStyle = '#ff7a00';
+  ctx.beginPath(); ctx.moveTo(-4, -9); ctx.quadraticCurveTo(-5, -15 * f, 0, -19 * f);
+  ctx.quadraticCurveTo(5, -15 * f, 4, -9); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ffe14d';
+  ctx.beginPath(); ctx.moveTo(-2, -9); ctx.quadraticCurveTo(-2, -13 * f, 0, -15 * f);
+  ctx.quadraticCurveTo(2, -13 * f, 2, -9); ctx.closePath(); ctx.fill();
+}
+
+function desenharGarrafas() {
+  for (const g of garrafas) {
+    ctx.save();
+    ctx.translate(g.x, g.y);
+    ctx.globalAlpha = 0.35;                                         // brilho de fogo em volta
+    ctx.fillStyle = '#ff7a00';
+    ctx.beginPath(); ctx.arc(0, 0, 13 + Math.sin(relogio * 30 + g.x) * 2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.rotate(g.rot);
+    garrafaForma();
+    ctx.restore();
+  }
+}
+
+// Pedacinhos voando quando algo é quebrado
 function desenharParticulas() {
-  ctx.fillStyle = '#b5651d';
-  for (const p of particulas) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+  for (const p of particulas) { ctx.fillStyle = p.cor || '#b5651d'; ctx.fillRect(p.x - 2, p.y - 2, 4, 4); }
+}
+
+// Braço do macaco: do ombro até a mão (uma bolinha clara na ponta)
+function bracoMacaco(xo, yo, xm, ym, corPelo, corMao) {
+  ctx.strokeStyle = corPelo; ctx.lineWidth = 8; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(xo, yo); ctx.lineTo(xm, ym); ctx.stroke();
+  ctx.lineCap = 'butt';
+  ctx.fillStyle = corMao;
+  ctx.beginPath(); ctx.arc(xm, ym, 5.5, 0, Math.PI * 2); ctx.fill();
 }
 
 function desenharVilao() {
-  const levantado = estado === 'jogo' && tempoFerido <= 0 && tempoSpawn < 0.5;
+  const v = vilao, t = v.t;
+  const furia = v.modo === 'furia';
+  // cores normais, ou tudo vermelho na fúria
+  const pelo = furia ? '#b3121a' : '#8b5a2b';
+  const peloEsc = furia ? '#8c0c12' : '#7a4a1e';
+  const claro = furia ? '#ff5547' : '#d9a76a';
+  const narizC = furia ? '#5a0508' : '#5a3210';
+  const bocaC = furia ? '#2a0003' : '#3a1500';
+
+  // pose: posição das mãos, itens segurados e tipo de boca
+  let mE = [-27, -8], mD = [27, -8];         // braços caídos
+  let boca = 'fechada';
+  const itens = [];
+  const levantado = estado === 'jogo' && tempoFerido <= 0 && v.modo === 'normal' && tempoSpawn < 0.5;
+  if (levantado) {                           // segura o barril antes de jogar
+    mE = [-26, -64]; mD = [26, -64];
+    itens.push({ tipo: 'barril', x: 0, y: -78 });
+  } else if (v.modo === 'banana') {
+    if (t < 0.65) {                          // levanta a banana para arremessar
+      mD = [28, -70];
+      itens.push({ tipo: 'banana', x: 28, y: -80, rot: 0.5, esc: 1 });
+    } else if (t < 0.95) {                   // arremessa
+      const u = (t - 0.65) / 0.3;
+      mD = [28 + 8 * u, -70 + 42 * u];
+    } else if (t < 2.0) {                    // bate no próprio peito
+      const k = Math.floor((t - 0.95) / 0.25) % 2;
+      mE = k === 0 ? [-8, -26] : [-30, -44];
+      mD = k === 0 ? [30, -44] : [8, -26];
+    } else if (t < 2.6) {                    // leva uma banana à boca
+      const u = (t - 2.0) / 0.6;
+      mD = [27 - 20 * u, -8 - 33 * u];
+      itens.push({ tipo: 'banana', x: mD[0] + 2, y: mD[1] - 4, rot: -0.5 - u, esc: 1 });
+    } else {                                 // come a banana
+      const u = Math.min(1, (t - 2.6) / 0.9);
+      mD = [7, -41];
+      boca = Math.floor((t - 2.6) / 0.15) % 2 === 0 ? 'aberta' : 'fechada';
+      if (u < 1) itens.push({ tipo: 'banana', x: 9, y: -45, rot: -1.5, esc: 1 - 0.75 * u });
+    }
+  } else if (furia) {
+    boca = 'grito';
+    const b = Math.sin(relogio * 16);        // bate os punhos
+    mE = [-28, -30 + 14 * b]; mD = [28, -30 - 14 * b];
+    if ((t >= 0.6 && t < 1.0) || (t >= 2.1 && t < 2.5)) {   // levanta a garrafa antes de arremessar
+      mD = [26, -66];
+      itens.push({ tipo: 'garrafa', x: 26, y: -78 });
+    }
+  }
+
   ctx.save();
-  ctx.translate(36, andares[TOPO].y);
+  let tx = 36, ty = andares[TOPO].y;
+  if (furia) { tx += Math.sin(relogio * 60) * 1.8; ty += Math.cos(relogio * 47) * 1.2; }   // treme de raiva
+  ctx.translate(tx, ty);
+  if (furia) {
+    const s = 1 + 0.06 * Math.sin(relogio * 18);                                           // incha e desincha
+    ctx.scale(s, s);
+    ctx.globalAlpha = 0.2 + 0.1 * Math.sin(relogio * 14);                                  // brilho vermelho
+    ctx.fillStyle = '#ff2a2a';
+    ctx.beginPath(); ctx.arc(0, -34, 56, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   // rabo enrolado
-  ctx.strokeStyle = '#7a4a1e'; ctx.lineWidth = 4;
+  ctx.strokeStyle = peloEsc; ctx.lineWidth = 4;
   ctx.beginPath(); ctx.moveTo(-18, -12); ctx.bezierCurveTo(-40, -14, -42, -36, -28, -38); ctx.stroke();
   // pernas e pés
-  ctx.fillStyle = '#7a4a1e';
+  ctx.fillStyle = peloEsc;
   ctx.fillRect(-16, -10, 12, 10); ctx.fillRect(4, -10, 12, 10);
-  ctx.fillStyle = '#d9a76a';
+  ctx.fillStyle = claro;
   ctx.fillRect(-18, -4, 14, 4); ctx.fillRect(4, -4, 14, 4);
   // corpo e barriga
-  ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-20, -38, 40, 30);
-  ctx.fillStyle = '#d9a76a'; ctx.fillRect(-12, -32, 24, 20);
+  ctx.fillStyle = pelo; ctx.fillRect(-20, -38, 40, 30);
+  ctx.fillStyle = claro; ctx.fillRect(-12, -32, 24, 20);
   // braços longos de macaco
-  ctx.fillStyle = '#8b5a2b';
-  if (levantado) {
-    ctx.fillRect(-30, -64, 8, 30); ctx.fillRect(22, -64, 8, 30);
-    ctx.fillStyle = '#d9a76a'; ctx.fillRect(-31, -68, 10, 6); ctx.fillRect(21, -68, 10, 6);
-    desenharBarrilNo(0, -78, 0);                    // segura o barril antes de jogar
-  } else {
-    ctx.fillRect(-30, -38, 8, 32); ctx.fillRect(22, -38, 8, 32);
-    ctx.fillStyle = '#d9a76a'; ctx.fillRect(-31, -8, 10, 6); ctx.fillRect(21, -8, 10, 6);
-  }
+  bracoMacaco(-20, -32, mE[0], mE[1], pelo, claro);
+  bracoMacaco(20, -32, mD[0], mD[1], pelo, claro);
   // cabeça e orelhas
-  ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-14, -60, 28, 24);
+  ctx.fillStyle = pelo; ctx.fillRect(-14, -60, 28, 24);
   ctx.beginPath(); ctx.arc(-16, -48, 7, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.arc(16, -48, 7, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#d9a76a';
+  ctx.fillStyle = claro;
   ctx.beginPath(); ctx.arc(-16, -48, 3.5, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.arc(16, -48, 3.5, 0, Math.PI * 2); ctx.fill();
   // rosto
   ctx.fillRect(-10, -54, 20, 16);
   ctx.fillStyle = '#fff'; ctx.fillRect(-8, -52, 6, 6); ctx.fillRect(2, -52, 6, 6);
-  ctx.fillStyle = '#000'; ctx.fillRect(-6, -50, 3, 4); ctx.fillRect(3, -50, 3, 4);
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 2;      // sobrancelhas bravas
-  ctx.beginPath(); ctx.moveTo(-9, -55); ctx.lineTo(-2, -51); ctx.moveTo(9, -55); ctx.lineTo(2, -51); ctx.stroke();
-  ctx.fillStyle = '#5a3210'; ctx.fillRect(-3, -46, 2, 2); ctx.fillRect(1, -46, 2, 2);   // nariz
-  ctx.fillStyle = '#3a1500'; ctx.fillRect(-6, -42, 12, 4);                              // boca
-  ctx.fillStyle = '#fff'; ctx.fillRect(-5, -42, 3, 2); ctx.fillRect(2, -42, 3, 2);      // dentes
+  ctx.fillStyle = furia ? '#ff0000' : '#000';
+  if (furia) { ctx.fillRect(-7, -51, 4, 5); ctx.fillRect(3, -51, 4, 5); }
+  else { ctx.fillRect(-6, -50, 3, 4); ctx.fillRect(3, -50, 3, 4); }
+  ctx.strokeStyle = '#000'; ctx.lineWidth = furia ? 3 : 2;      // sobrancelhas bravas
+  ctx.beginPath();
+  if (furia) { ctx.moveTo(-11, -58); ctx.lineTo(-2, -50); ctx.moveTo(11, -58); ctx.lineTo(2, -50); }
+  else { ctx.moveTo(-9, -55); ctx.lineTo(-2, -51); ctx.moveTo(9, -55); ctx.lineTo(2, -51); }
+  ctx.stroke();
+  ctx.fillStyle = narizC; ctx.fillRect(-3, -46, 2, 2); ctx.fillRect(1, -46, 2, 2);   // nariz
+  if (boca === 'grito') {                                      // boca aberta gritando
+    ctx.fillStyle = bocaC; ctx.fillRect(-7, -45, 14, 9);
+    ctx.fillStyle = '#ff9aa0'; ctx.fillRect(-4, -39, 8, 3);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-6, -45, 3, 3); ctx.fillRect(3, -45, 3, 3);
+  } else if (boca === 'aberta') {                              // mastigando (aberta)
+    ctx.fillStyle = bocaC; ctx.fillRect(-6, -43, 12, 7);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-5, -43, 3, 2); ctx.fillRect(2, -43, 3, 2);
+  } else {                                                     // boca fechada
+    ctx.fillStyle = bocaC; ctx.fillRect(-6, -42, 12, 4);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-5, -42, 3, 2); ctx.fillRect(2, -42, 3, 2);
+  }
+  // itens nas mãos (barril, banana ou garrafa)
+  for (const it of itens) {
+    if (it.tipo === 'barril') desenharBarrilNo(it.x, it.y, 0);
+    else {
+      ctx.save();
+      ctx.translate(it.x, it.y);
+      if (it.tipo === 'banana') { ctx.rotate(it.rot); ctx.scale(1.2 * it.esc, 1.2); bananaForma(); }
+      else { ctx.scale(1.2, 1.2); garrafaForma(); }
+      ctx.restore();
+    }
+  }
+  // fumaça saindo das orelhas na fúria
+  if (furia) {
+    ctx.fillStyle = '#ffd5cc';
+    for (let k = 0; k < 3; k++) {
+      const p = (relogio * 1.6 + k / 3) % 1;
+      ctx.globalAlpha = 1 - p;
+      ctx.beginPath();
+      ctx.arc(-22 + (k % 2) * 44 + Math.sin(p * 6 + k) * 3, -56 - p * 26, 3 + p * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
   ctx.restore();
 }
 
@@ -603,11 +1117,30 @@ function desenharHeroi() {
   const f = Math.floor(j.anim) % 2;
   ctx.save();
   ctx.translate(j.x, j.y);
+  if (j.estado === 'escorrega') {                  // casca de banana escorregando sob os pés
+    ctx.save();
+    ctx.translate(-j.face * 5, -3);
+    ctx.scale(1.1, 1.1);
+    bananaForma();
+    ctx.restore();
+  }
+  if (j.estado === 'queda') {                      // estrelinhas de tontura
+    for (let k = 0; k < 3; k++) {
+      const ang = relogio * 10 + k * 2.1;
+      estrela(Math.cos(ang) * 10, -38 + Math.sin(ang) * 3, 2.5, '#ffe14d');
+    }
+  }
   if (j.estado === 'ferido') {                     // cai de lado quando é atingido
     const prog = Math.min(1, (1.1 - tempoFerido) * 4);
     ctx.translate(0, -6);
     ctx.rotate(-Math.PI / 2 * prog);
     ctx.translate(0, 6);
+  }
+  if (j.estado === 'escorrega' || j.estado === 'queda') {   // gira para trás ao escorregar e cair
+    const giro = j.estado === 'escorrega' ? Math.min(1, j.tEsc / 0.3) * 1.5 : 1.5 + j.vy * 0.004;
+    ctx.translate(0, -14);
+    ctx.rotate(-j.face * giro);
+    ctx.translate(0, 14);
   }
   if (j.estado === 'escada') {
     // de frente, braços alternando
@@ -619,9 +1152,16 @@ function desenharHeroi() {
     ctx.fillRect(-10, f ? -28 : -22, 3, 8); ctx.fillRect(7, f ? -22 : -28, 3, 8);
     ctx.fillRect(-4, -27, 8, 7);
     ctx.fillStyle = '#ff7a00'; ctx.fillRect(-6, -32, 12, 6);
+    if (martelo > 0) {                               // marreta ao lado do corpo na escada
+      ctx.save();
+      ctx.translate(9, -18);
+      ctx.rotate(0.5 + Math.sin(relogio * 14) * 0.5);
+      formaMarreta();
+      ctx.restore();
+    }
   } else {
     ctx.scale(j.face, 1);
-    const ar = j.estado === 'ar';
+    const ar = j.estado === 'ar' || j.estado === 'escorrega' || j.estado === 'queda';
     ctx.fillStyle = '#2b4c9b';                     // pernas
     if (ar) { ctx.fillRect(-6, -9, 5, 7); ctx.fillRect(2, -9, 6, 5); }
     else { ctx.fillRect(-5 + (f ? -1 : 1), -9, 4, 9); ctx.fillRect(1 + (f ? 1 : -1), -9, 4, 9); }
@@ -657,12 +1197,22 @@ function coracao(x, y, s, cor) {
 
 function desenharHUD() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, 0, L, 46);
+  ctx.fillRect(vx0 - 10, 0, vx1 - vx0 + 20, 46);
   texto('PONTOS', 12, 17, 12, '#9fb3d9', 'left');
   texto(String(pontos), 12, 38, 20, '#ffffff', 'left');
   texto('RECORDE', 150, 17, 12, '#9fb3d9');
   texto(String(Math.max(recorde, pontos)), 150, 38, 20, '#ffd400');
-  for (let i = 0; i < 3; i++) coracao(L - 22 - i * 24, 12, 20, i < vidas ? '#ff3b4e' : '#3a3f55');
+  // vidas: 3 corações, ou 4 se pegou o coração extra
+  const nCor = Math.max(3, vidas);
+  for (let i = 0; i < nCor; i++) coracao(L - 22 - i * 24, 12, 20, i < vidas ? '#ff3b4e' : '#3a3f55');
+  if (estado === 'jogo') {                           // botão de pausa
+    const b = botaoPausa;
+    ctx.fillStyle = '#2b2158'; ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = '#ffd400'; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = '#ffd400';
+    ctx.fillRect(b.x + 8, b.y + 8, 4, 12); ctx.fillRect(b.x + 15, b.y + 8, 4, 12);
+    texto('PAUSE', b.x + 24, b.y + 19, 11, '#ffffff', 'left');
+  }
   if (martelo > 0) {                                 // barrinha do tempo da marreta
     texto('MARRETA', 12, 62, 11, '#ffb300', 'left');
     ctx.fillStyle = '#3a3f55'; ctx.fillRect(72, 54, 100, 8);
@@ -680,48 +1230,70 @@ function painel(y, h) {
 function desenharTelas() {
   const piscar = Math.floor(relogio * 2) % 2 === 0;
   if (estado === 'menu') {
-    painel(130, 380);
-    texto('DONKEY SEST', 180, 190, 38, '#ffd400');
-    texto('Chegue ao topo da torre!', 180, 225, 17, '#ffffff');
-    texto('Fuja dos barris do macaco.', 180, 247, 15, '#9fb3d9');
-    texto('Setas ← →: andar  |  Setas ↑ ↓: escadas', 180, 290, 14, '#ffffff');
-    texto('Espaço: pular', 180, 312, 14, '#ffffff');
-    texto('Celular: arraste para andar e subir,', 180, 338, 13, '#9fb3d9');
-    texto('toque rápido para pular', 180, 356, 13, '#9fb3d9');
-    texto('Pule por cima do barril: +100 pontos', 180, 386, 14, '#5de0ff');
-    texto('Marreta: quebra barris (+300), mas não pula', 180, 410, 13, '#ffb300');
-    texto('Você tem 3 vidas', 180, 440, 14, '#ff6b7a');
-    if (piscar) texto('TOQUE OU ESPAÇO PARA JOGAR', 180, 482, 20, '#ffd400');
+    painel(100, 490);
+    texto('DONKEY SEST', 180, 158, 38, '#ffd400');
+    texto('Chegue ao baú de bananas no topo!', 180, 192, 15, '#ffffff');
+    texto('Fuja dos barris e das garrafas de fogo.', 180, 214, 13, '#9fb3d9');
+    texto('A / D ou ← →: andar', 180, 254, 14, '#ffffff');
+    texto('W / S ou ↑ ↓: subir e descer escadas', 180, 276, 14, '#ffffff');
+    texto('Espaço ou W: pular', 180, 298, 14, '#ffffff');
+    texto('Celular: arraste para andar e subir,', 180, 324, 13, '#9fb3d9');
+    texto('toque rápido para pular', 180, 342, 13, '#9fb3d9');
+    texto('Pule por cima do barril: +100 pontos', 180, 374, 14, '#5de0ff');
+    texto('Marreta: quebra barris e garrafas (+300)', 180, 396, 13, '#ffb300');
+    texto('Cuidado: banana faz escorregar e cair!', 180, 418, 13, '#ffe14d');
+    texto('A cada 15 s o macaco enfurece!', 180, 440, 13, '#ff8a5c');
+    texto('Pegue o coração: +1 vida', 180, 462, 13, '#ff6b7a');
+    texto('Você tem 3 vidas. Pause: botão ou tecla P', 180, 484, 13, '#9fb3d9');
+    if (piscar) texto('TOQUE OU ESPAÇO PARA JOGAR', 180, 545, 16, '#ffd400');
   } else if (estado === 'perdeu') {
-    painel(190, 250);
-    texto('FIM DE JOGO', 180, 245, 34, '#ff3b4e');
-    texto('Pontos: ' + pontos, 180, 295, 22, '#ffffff');
-    texto('Recorde: ' + recorde, 180, 328, 20, '#ffd400');
-    texto('Os barris venceram desta vez!', 180, 365, 14, '#9fb3d9');
-    if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 415, 17, '#ffd400');
+    painel(240, 250);
+    texto('FIM DE JOGO', 180, 295, 34, '#ff3b4e');
+    texto('Pontos: ' + pontos, 180, 345, 22, '#ffffff');
+    texto('Recorde: ' + recorde, 180, 378, 20, '#ffd400');
+    texto('Os barris venceram desta vez!', 180, 415, 14, '#9fb3d9');
+    if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 465, 17, '#ffd400');
   } else if (estado === 'ganhou') {
-    painel(190, 250);
-    texto('VOCÊ CHEGOU AO TOPO!', 180, 245, 26, '#5de0ff');
-    texto('Pontos: ' + pontos, 180, 295, 22, '#ffffff');
-    texto('Recorde: ' + recorde, 180, 328, 20, '#ffd400');
-    texto('Parabéns, campeão!', 180, 365, 14, '#9fb3d9');
-    if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 415, 17, '#ffd400');
+    painel(240, 250);
+    texto('VOCÊ CHEGOU AO TOPO!', 180, 295, 26, '#5de0ff');
+    texto('Pontos: ' + pontos, 180, 345, 22, '#ffffff');
+    texto('Recorde: ' + recorde, 180, 378, 20, '#ffd400');
+    texto('Parabéns, campeão!', 180, 415, 14, '#9fb3d9');
+    if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 465, 17, '#ffd400');
+  }
+}
+
+// Menu de pausa (escurece a tela e mostra os dois botões)
+function desenharPausa() {
+  ctx.fillStyle = 'rgba(5,3,20,0.6)';
+  ctx.fillRect(vx0 - 10, vy0 - 10, vx1 - vx0 + 20, vy1 - vy0 + 20);
+  painel(290, 200);
+  texto('PAUSADO', 180, 338, 32, '#ffd400');
+  for (let i = 0; i < botoesPausa.length; i++) {
+    const b = botoesPausa[i];
+    const sel = i === opcaoPausa;
+    ctx.fillStyle = sel ? '#ffd400' : '#2b2158';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = '#ffd400'; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
+    texto(b.txt, b.x + b.w / 2, b.y + 29, 18, sel ? '#1a1033' : '#ffffff');
   }
 }
 
 function desenhar() {
-  ctx.setTransform(escala, 0, 0, escala, 0, 0);
-  ctx.clearRect(0, 0, L, A);
+  ctx.setTransform(dpr * esc, 0, 0, dpr * esc, dpr * ox, dpr * oy);
   ctx.save();
-  if (tremor > 0) ctx.translate((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
+  if (tremor > 0 && !pausado) ctx.translate((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
 
   desenharFundo();
   desenharAndares();
   desenharEscadas();
   desenharMeta();
   desenharMartelos();
+  desenharCoracaoVida();
+  desenharBananas();
   desenharVilao();
   for (const b of barris) desenharBarrilNo(b.x, b.y, b.rot);
+  desenharGarrafas();
   desenharParticulas();
   if (estado !== 'menu') desenharHeroi();
   else { jogador.face = 1; desenharHeroi(); }
@@ -735,6 +1307,7 @@ function desenhar() {
 
   desenharHUD();
   desenharTelas();
+  if (pausado) desenharPausa();
 }
 
 // ---------- Laço principal: roda uns 60 vezes por segundo ----------
@@ -742,7 +1315,7 @@ let ultimo = performance.now();
 function quadro(agora) {
   const dt = Math.min(0.05, (agora - ultimo) / 1000);
   ultimo = agora;
-  relogio += dt;
+  if (!pausado) relogio += dt;       // pausado: as animações também param
   atualizar(dt);
   desenhar();
   requestAnimationFrame(quadro);
