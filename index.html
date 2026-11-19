@@ -19,14 +19,45 @@
 // =====================================================
 
 // ---------- Tamanho do jogo ----------
-// O "mundo" do jogo mede 360 x 740. A tela inteira é usada: o mundo é
-// aumentado ou diminuído para caber no aparelho (celular, tablet ou computador)
-// e o cenário (céu, cidade e chão) continua além das bordas da torre.
-const L = 360, A = 740;
+// A torre se adapta ao aparelho quando uma partida começa:
+//  - quanto mais alta a tela, mais andares a torre tem (de 8 a 12);
+//  - quanto mais larga a tela, mais largos ficam os andares (de 360 até 720).
+// Depois a torre é aumentada ou diminuída para caber na tela inteira, e o
+// cenário (céu, cidade e chão) continua além das bordas da torre.
+const MIN_ANDARES = 8, MAX_ANDARES = 12;   // quantidade de andares
+const MAX_LARGURA = 720;                   // largura máxima dos andares
+let L = 360, A = 740;                      // largura e altura do mundo do jogo
+// Aparelho de toque (celular/tablet)? Então mostramos setas na tela
+let controlesToque = false;
+try {
+  controlesToque = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+                   (navigator.maxTouchPoints > 0 && !(window.matchMedia && matchMedia('(pointer: fine)').matches));
+} catch (e) {}
+let botoesTela = { s: 56, lista: [] };     // posição dos botões na tela (em pixels)
+let DX = 0, DY = 0;                        // deslocamento dos menus (mantém tudo centralizado)
 const tela = document.getElementById('tela');
 const ctx = tela.getContext('2d');
 let dpr = 1, esc = 1, ox = 0, oy = 0;      // zoom e posição do mundo na tela
 let vx0 = 0, vx1 = L, vy0 = 0, vy1 = A;    // parte do mundo que aparece na tela
+
+// Posição dos botões da tela (em pixels): ◀ ▶ à esquerda e ▼ ▲ PULAR à direita
+function calcularBotoes(w, h) {
+  const s = Math.max(50, Math.min(76, Math.round(Math.min(w, h) * 0.16)));   // tamanho do botão
+  const m = 14, g = 8, y = h - m - s;
+  return { s: s, lista: [
+    { id: 'esq',   x: m,                    y: y, w: s, h: s },
+    { id: 'dir',   x: m + s + g,            y: y, w: s, h: s },
+    { id: 'baixo', x: w - m - 3 * s - 2 * g, y: y, w: s, h: s },
+    { id: 'cima',  x: w - m - 2 * s - g,    y: y, w: s, h: s },
+    { id: 'pulo',  x: w - m - s,            y: y, w: s, h: s }
+  ] };
+}
+// Altura que o jogo deixa livre embaixo para os botões (só em celular em pé;
+// com o celular deitado os botões ficam nas laterais, onde sobra espaço)
+function reservaToque(w, h) {
+  if (!controlesToque || w > h) return 0;
+  return calcularBotoes(w, h).s + 34;
+}
 
 function ajustarTela() {
   dpr = window.devicePixelRatio || 1;
@@ -35,15 +66,35 @@ function ajustarTela() {
   tela.style.height = h + 'px';
   tela.width = Math.round(w * dpr);
   tela.height = Math.round(h * dpr);
-  esc = Math.min(w / L, h / A);             // quanto o mundo cresce ou encolhe
+  botoesTela = calcularBotoes(w, h);
+  const hh = h - reservaToque(w, h);        // altura que sobra para a torre
+  esc = Math.min(w / L, hh / A);            // quanto o mundo cresce ou encolhe
   ox = (w - L * esc) / 2;                   // centraliza o mundo na tela
-  oy = (h - A * esc) / 2;
+  oy = (hh - A * esc) / 2;
   vx0 = -ox / esc; vx1 = (w - ox) / esc;
   vy0 = -oy / esc; vy1 = (h - oy) / esc;
 }
-window.addEventListener('resize', ajustarTela);
-window.addEventListener('orientationchange', ajustarTela);
-ajustarTela();
+// Escolhe quantos andares e que largura a torre terá para esta tela
+function definirMundo() {
+  const w = window.innerWidth || 360, h = window.innerHeight || 740;
+  const hh = h - reservaToque(w, h);                     // (menos a faixa dos botões, no celular)
+  let n = Math.round((hh / 1.1 - 180) / 80) + 1;         // quantos andares cabem na altura da tela
+  n = Math.max(MIN_ANDARES, Math.min(MAX_ANDARES, n));
+  A = 180 + 80 * (n - 1);                                // cada andar a mais soma 80 de altura
+  const zoom = Math.min(hh / A, w / 360);
+  L = Math.min(MAX_LARGURA, Math.round(w / zoom));       // largura que sobra na tela
+  DX = (L - 360) / 2;
+  DY = (A - 740) / 2;
+  montarTorre(n);
+  ajustarTela();
+}
+
+// Se a janela mudar de tamanho: no menu a torre é refeita; durante a partida só o zoom muda
+function aoRedimensionar() {
+  if (estado === 'menu' || estado === 'dificuldade') preparar(); else ajustarTela();
+}
+window.addEventListener('resize', aoRedimensionar);
+window.addEventListener('orientationchange', aoRedimensionar);
 
 // Converte a posição do dedo/mouse na tela para a posição dentro do mundo do jogo
 function paraMundo(e) {
@@ -58,41 +109,60 @@ const VEL_ESCADA = 60;         // velocidade do herói na escada
 const GRAVIDADE = 900;         // quão rápido as coisas caem
 const FORCA_PULO = 330;        // força do pulo
 const TEMPO_MARRETA = 8;       // segundos de marreta depois de pegar uma
-const INTERVALO_FURIA = 15;    // de quantos em quantos segundos o macaco enfurece
 const DURACAO_FURIA = 4;       // quanto tempo a fúria dura
 const VEL_GARRAFA = 190;       // velocidade da garrafa flamejante
 const DURACAO_BANANA = 3.5;    // duração do ataque de bananas (arremesso + animação do macaco)
 const VIDA_BANANA = 12;        // segundos que a banana fica no chão antes de sumir
 const MAX_BANANAS = 5;         // máximo de bananas no cenário ao mesmo tempo
 
+// ---------- Dificuldades ----------
+// vidas: vidas no começo | velBarril: velocidade dos barris | intervaloBarril, intervaloBanana:
+// quanto menor, mais rápido o macaco joga | intervaloFuria: segundos entre as fúrias | velGarrafa: velocidade do fogo
+// O "médio" é o jogo normal; o "fácil" é mais calmo e o "difícil" tem um macaco muito mais rápido.
+const NIVEIS = {
+  facil:   { nome: 'FÁCIL',   vidas: 4, velBarril: 0.75, intervaloBarril: 1.4, intervaloBanana: 1.6, intervaloFuria: 20, velGarrafa: 0.8 },
+  medio:   { nome: 'MÉDIO',   vidas: 3, velBarril: 1,    intervaloBarril: 1,   intervaloBanana: 1,   intervaloFuria: 15, velGarrafa: 1 },
+  dificil: { nome: 'DIFÍCIL', vidas: 2, velBarril: 1.3,  intervaloBarril: 0.7, intervaloBanana: 0.6, intervaloFuria: 10, velGarrafa: 1.35 }
+};
+const ORDEM_NIVEIS = ['facil', 'medio', 'dificil'];
+let nivel = 'medio';           // dificuldade escolhida
+let dif = NIVEIS.medio;        // números da dificuldade escolhida
+let opcaoNivel = 1;            // opção marcada na tela de dificuldade
+
 // ---------- A torre ----------
 // Cada andar: y = altura do chão, x1/x2 = onde começa e termina,
 // dir = para que lado os barris rolam (em direção ao buraco).
-const andares = [
-  { y: 700, x1: 0,  x2: 360, dir: -1 }, // 0 = chão
-  { y: 620, x1: 0,  x2: 300, dir:  1 },
-  { y: 540, x1: 60, x2: 360, dir: -1 },
-  { y: 460, x1: 0,  x2: 300, dir:  1 },
-  { y: 380, x1: 60, x2: 360, dir: -1 },
-  { y: 300, x1: 0,  x2: 300, dir:  1 },
-  { y: 220, x1: 60, x2: 360, dir: -1 },
-  { y: 140, x1: 0,  x2: 200, dir:  1 }  // 7 = topo (o vilão fica aqui)
-];
-const TOPO = andares.length - 1;
+let andares = [];      // 0 = chão, o último é o topo (onde o vilão fica)
+let escadas = [];      // cada escada liga o andar "base" ao andar de cima dele
+let TOPO = 7;          // número do último andar
 
-// Cada escada liga o andar "base" ao andar de cima dele.
-const escadas = [
-  { x: 250, base: 0 }, { x: 80,  base: 0 },
-  { x: 120, base: 1 }, { x: 270, base: 1 },
-  { x: 240, base: 2 }, { x: 90,  base: 2 },
-  { x: 100, base: 3 }, { x: 260, base: 3 },
-  { x: 240, base: 4 }, { x: 90,  base: 4 },
-  { x: 120, base: 5 }, { x: 270, base: 5 },
-  { x: 150, base: 6 }
-];
+// Monta os n andares e as escadas, na largura L do mundo
+function montarTorre(n) {
+  const buraco = 60;                              // largura do buraco por onde os barris caem
+  const larguraTopo = Math.round(L * 0.555);      // o andar do topo é mais curto
+  andares = [];
+  for (let i = 0; i < n; i++) {
+    const y = A - 40 - 80 * i;                    // 80 de distância entre os andares
+    if (i === 0) andares.push({ y: y, x1: 0, x2: L, dir: -1 });
+    else if (i === n - 1) andares.push({ y: y, x1: 0, x2: larguraTopo, dir: 1 });
+    else if (i % 2 === 1) andares.push({ y: y, x1: 0, x2: L - buraco, dir: 1 });
+    else andares.push({ y: y, x1: buraco, x2: L, dir: -1 });
+  }
+  TOPO = n - 1;
+  // posição das escadas em cada andar (como fração da largura, assim servem para qualquer tela)
+  const padroes = [[250, 80], [120, 270], [240, 90], [100, 260]].map(function (p) {
+    return p.map(function (x) { return x / 360; });
+  });
+  escadas = [];
+  for (let k = 0; k < n - 2; k++) {
+    for (const f of padroes[k % 4]) escadas.push({ x: Math.round(f * L), base: k });
+    if (L > 520) escadas.push({ x: Math.round(L / 2), base: k });   // andares largos ganham uma escada no meio
+  }
+  escadas.push({ x: larguraTopo - 50, base: n - 2 });               // última escada, até o topo
+}
 
 // ---------- Estado do jogo ----------
-let estado = 'menu';   // menu, jogo, perdeu ou ganhou
+let estado = 'menu';   // menu, dificuldade, jogo, perdeu ou ganhou
 let jogador, barris, popups, martelos, particulas, bananas, garrafas, coracaoVida;
 let vilao;             // o macaco: modo 'normal', 'banana' ou 'furia'
 let vidas, pontos, recorde = 0, andarMax;
@@ -107,12 +177,13 @@ let opcaoPausa = 0;    // opção marcada no menu de pausa (0 = continuar, 1 = r
 try { recorde = parseInt(localStorage.getItem('donkeySestRecorde')) || 0; } catch (e) {}
 
 function novoJogador() {
-  return { x: 180, y: andares[0].y, vx: 0, vy: 0, andar: 0,
+  return { x: Math.round(L / 2), y: andares[0].y, vx: 0, vy: 0, andar: 0,
            estado: 'chao', face: 1, anim: 0, escada: null, tEsc: 0, alvoX: 0 };
 }
 
 // Zera tudo para começar uma partida nova
 function preparar() {
+  definirMundo();                       // adapta a torre ao tamanho da tela
   jogador = novoJogador();
   barris = [];
   popups = [];
@@ -120,18 +191,22 @@ function preparar() {
   bananas = [];
   garrafas = [];
   martelo = 0;
-  // 3 marretas espalhadas pela torre (andar e posição)
-  martelos = [
-    { andar: 1, x: 190, coletado: false },
-    { andar: 2, x: 320, coletado: false },
-    { andar: 4, x: 290, coletado: false }
-  ];
-  // 1 coração de vida extra (só pode ser pego uma vez)
-  coracaoVida = { andar: 5, x: 40, coletado: false };
+  // 3 marretas espalhadas pela torre (andar e posição, sempre dentro do andar)
+  const n = andares.length;
+  const andaresMarreta = [1, Math.round(n * 0.3), Math.round(n * 0.55)];
+  const posMarreta = [0.53, 0.89, 0.8];
+  martelos = andaresMarreta.map(function (f, i) {
+    const a = andares[f];
+    return { andar: f, x: Math.max(a.x1 + 14, Math.min(Math.round(posMarreta[i] * L), a.x2 - 14)), coletado: false };
+  });
+  // 1 coração de vida extra (só pode ser pego uma vez), num andar do meio para cima
+  const fc = Math.round(n * 0.62);
+  const ac = andares[fc];
+  coracaoVida = { andar: fc, x: Math.max(40, ac.x1 + 25), coletado: false };
   vilao = { modo: 'normal', t: 0, lancados: 0 };
-  tempoBanana = 5;
-  tempoFuria = INTERVALO_FURIA;
-  vidas = 3;
+  tempoBanana = 5 * dif.intervaloBanana;
+  tempoFuria = dif.intervaloFuria;
+  vidas = dif.vidas;
   pontos = 0;
   andarMax = 0;
   tempoJogo = 0;
@@ -144,9 +219,33 @@ function preparar() {
 }
 preparar();
 
+// Do menu ou do fim de jogo, vai para a tela de escolha da dificuldade
 function iniciar() {
   if (performance.now() < bloqueio) return;
-  if (estado !== 'jogo') { preparar(); estado = 'jogo'; }
+  if (estado === 'menu' || estado === 'perdeu' || estado === 'ganhou') {
+    preparar();                       // torre nova de fundo
+    opcaoNivel = ORDEM_NIVEIS.indexOf(nivel);   // já marca a última dificuldade usada
+    estado = 'dificuldade';
+  }
+}
+// Começa a partida na dificuldade escolhida (0 = fácil, 1 = médio, 2 = difícil)
+function comecar(i) {
+  if (performance.now() < bloqueio) return;
+  nivel = ORDEM_NIVEIS[i];
+  dif = NIVEIS[nivel];
+  opcaoNivel = i;
+  preparar();
+  estado = 'jogo';
+}
+// Botões da tela de dificuldade (posições dentro do painel)
+const botoesNivel = [
+  { x: 50, y: 232, w: 260, h: 74, i: 0, cor: '#4cd964', desc: 'Mais vidas, barris lentos e poucos ataques' },
+  { x: 50, y: 320, w: 260, h: 74, i: 1, cor: '#ffd400', desc: 'Como o jogo foi pensado' },
+  { x: 50, y: 408, w: 260, h: 74, i: 2, cor: '#ff3b4e', desc: 'Vilão rápido, ataca sem parar e só 2 vidas' }
+];
+function nivelEm(p) {
+  for (const b of botoesNivel) if (dentro(p, b, 0)) return b.i;
+  return -1;
 }
 
 // ---------- Pausa ----------
@@ -163,6 +262,7 @@ function pausar() {
   pedidoPulo = false;                 // limpa qualquer comando que estava pendente
   ponteiro = null;
   toque.esq = toque.dir = toque.cima = toque.baixo = toque.cimaBorda = false;
+  soltarTodosBotoes();
 }
 function continuar() { pausado = false; }
 function reiniciar() { preparar(); estado = 'jogo'; }        // preparar() já tira da pausa
@@ -181,15 +281,49 @@ function opcaoEm(p) {                 // qual botão do menu de pausa está sob 
 // ---------- Controles ----------
 const teclas = {};
 const toque = { esq: false, dir: false, cima: false, baixo: false, cimaBorda: false };
+// Botões desenhados na tela (celular): quais estão apertados e qual dedo aperta qual
+const botoes = { esq: false, dir: false, cima: false, baixo: false };
+const dedosBotao = {};
+function botaoEm(cx, cy) {                 // qual botão está sob a posição (px da tela)? (com folga de 6 px)
+  for (const b of botoesTela.lista) {
+    if (cx >= b.x - 6 && cx <= b.x + b.w + 6 && cy >= b.y - 6 && cy <= b.y + b.h + 6) return b.id;
+  }
+  return null;
+}
+function recalcularBotoes() {
+  botoes.esq = botoes.dir = botoes.cima = botoes.baixo = false;
+  for (const id in dedosBotao) if (dedosBotao[id] !== 'pulo') botoes[dedosBotao[id]] = true;
+}
+function apertarBotao(id, nome) {
+  dedosBotao[id] = nome;
+  if (nome === 'pulo') pedidoPulo = true;
+  recalcularBotoes();
+}
+function soltarBotao(id) { delete dedosBotao[id]; recalcularBotoes(); }
+function soltarTodosBotoes() { for (const id in dedosBotao) delete dedosBotao[id]; recalcularBotoes(); }
 let pedidoPulo = false;
 let ponteiro = null;
 
 // Nome da tecla: letras pelo código físico (funciona mesmo com Caps Lock ligado)
+// (também entende navegadores antigos, que usam outros nomes e números para as teclas)
 function nomeTecla(e) {
-  if (e.key === ' ') return 'Space';
+  if (e.key === ' ' || e.key === 'Spacebar') return 'Space';
   if (e.code && e.code.indexOf('Key') === 0) return e.code;   // KeyW, KeyA, KeyS, KeyD, KeyP
-  return e.key;
+  const antigos = { Left: 'ArrowLeft', Up: 'ArrowUp', Right: 'ArrowRight', Down: 'ArrowDown', Esc: 'Escape' };
+  if (antigos[e.key]) return antigos[e.key];
+  if (e.key && e.key.length === 1 && 'WASDP'.indexOf(e.key.toUpperCase()) >= 0) return 'Key' + e.key.toUpperCase();
+  if (e.key && e.key !== 'Unidentified') return e.key;
+  const porNumero = { 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown', 32: 'Space', 13: 'Enter',
+                      27: 'Escape', 65: 'KeyA', 68: 'KeyD', 83: 'KeyS', 87: 'KeyW', 80: 'KeyP' };
+  return porNumero[e.keyCode] || e.key;
 }
+
+// O teclado só funciona se o jogo estiver "em foco". Em pré-visualizações e páginas
+// incorporadas isso não é automático, então pedimos o foco ao carregar e a cada toque/clique.
+tela.tabIndex = 0;
+tela.style.outline = 'none';
+function pedirFoco() { try { window.focus(); tela.focus({ preventScroll: true }); } catch (err) {} }
+pedirFoco();
 
 window.addEventListener('keydown', function (e) {
   const k = nomeTecla(e);
@@ -206,31 +340,66 @@ window.addEventListener('keydown', function (e) {
   if (estado === 'jogo') {
     if (k === 'Space' || k === 'Enter' || k === 'KeyW') pedidoPulo = true;   // W também pula
     else if (k === 'KeyP' || k === 'Escape') pausar();
+  } else if (estado === 'dificuldade') {          // escolher a dificuldade
+    if (k === 'ArrowUp' || k === 'KeyW') opcaoNivel = Math.max(0, opcaoNivel - 1);
+    else if (k === 'ArrowDown' || k === 'KeyS') opcaoNivel = Math.min(2, opcaoNivel + 1);
+    else if (k === '1' || k === '2' || k === '3') comecar(parseInt(k) - 1);
+    else if (k === 'Space' || k === 'Enter') comecar(opcaoNivel);
   } else if (k === 'Space' || k === 'Enter') iniciar();
 });
 window.addEventListener('keyup', function (e) { teclas[nomeTecla(e)] = false; });
-window.addEventListener('blur', function () { for (const k in teclas) teclas[k] = false; });
+window.addEventListener('blur', function () { for (const k in teclas) teclas[k] = false; soltarTodosBotoes(); });
 
 // Toque / mouse: arrastar anda e sobe; toque rápido pula
 tela.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 tela.addEventListener('pointerdown', function (e) {
-  e.preventDefault();
+  pedirFoco();                                     // (sem preventDefault: ele impedia o teclado de receber o foco)
   const p = paraMundo(e);
   if (pausado) {                                   // menu de pausa: só os botões funcionam
-    const o = opcaoEm(p);
+    const o = opcaoEm({ x: p.x - DX, y: p.y - DY });
     if (o >= 0) escolherPausa(o);
     return;
   }
-  if (estado === 'jogo' && dentro(p, botaoPausa, 8)) { pausar(); return; }
+  if (estado === 'jogo' && dentro({ x: p.x - DX, y: p.y }, botaoPausa, 8)) { pausar(); return; }
+  if (estado === 'dificuldade') {                  // toque num botão de dificuldade começa o jogo
+    const i = nivelEm({ x: p.x - DX, y: p.y - DY });
+    if (i >= 0) comecar(i);
+    return;
+  }
   if (estado !== 'jogo') { iniciar(); return; }
+  if (controlesToque) {                            // dedo em cima de um botão da tela?
+    const r = tela.getBoundingClientRect();
+    const nome = botaoEm(e.clientX - r.left, e.clientY - r.top);
+    if (nome) {
+      try { tela.setPointerCapture(e.pointerId); } catch (err) {}
+      apertarBotao(e.pointerId, nome);
+      return;
+    }
+  }
   if (ponteiro && e.pointerId !== ponteiro.id) { pedidoPulo = true; return; } // 2º dedo = pulo
   try { tela.setPointerCapture(e.pointerId); } catch (err) {}
   ponteiro = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moveu: false };
 });
 tela.addEventListener('pointermove', function (e) {
   if (pausado) {                                   // passar o mouse sobre um botão marca a opção
-    const o = opcaoEm(paraMundo(e));
+    const q = paraMundo(e);
+    const o = opcaoEm({ x: q.x - DX, y: q.y - DY });
     if (o >= 0) opcaoPausa = o;
+    return;
+  }
+  if (estado === 'dificuldade') {                  // mouse sobre um botão marca a opção
+    const q = paraMundo(e);
+    const i = nivelEm({ x: q.x - DX, y: q.y - DY });
+    if (i >= 0) opcaoNivel = i;
+    return;
+  }
+  if (dedosBotao[e.pointerId]) {                   // dedo escorregou para outro botão de direção
+    const r = tela.getBoundingClientRect();
+    const nome = botaoEm(e.clientX - r.left, e.clientY - r.top);
+    if (nome !== dedosBotao[e.pointerId]) {
+      soltarBotao(e.pointerId);
+      if (nome && nome !== 'pulo') apertarBotao(e.pointerId, nome);
+    }
     return;
   }
   if (!ponteiro || e.pointerId !== ponteiro.id) return;
@@ -244,6 +413,7 @@ tela.addEventListener('pointermove', function (e) {
   toque.baixo = dy > 22;
 });
 function fimToque(e) {
+  if (dedosBotao[e.pointerId]) { soltarBotao(e.pointerId); return; }   // soltou um botão da tela
   if (!ponteiro || e.pointerId !== ponteiro.id) return;
   if (!ponteiro.moveu && performance.now() - ponteiro.t0 < 300 && estado === 'jogo' && !pausado) pedidoPulo = true;
   ponteiro = null;
@@ -277,10 +447,10 @@ function jogarBarril() {
 function atualizarJogador(dt) {
   const j = jogador;
   // setas e WASD fazem a mesma coisa
-  const esq = teclas['ArrowLeft'] || teclas['KeyA'] || toque.esq;
-  const dir = teclas['ArrowRight'] || teclas['KeyD'] || toque.dir;
-  const cima = teclas['ArrowUp'] || teclas['KeyW'] || toque.cima;
-  const baixo = teclas['ArrowDown'] || teclas['KeyS'] || toque.baixo;
+  const esq = teclas['ArrowLeft'] || teclas['KeyA'] || toque.esq || botoes.esq;
+  const dir = teclas['ArrowRight'] || teclas['KeyD'] || toque.dir || botoes.dir;
+  const cima = teclas['ArrowUp'] || teclas['KeyW'] || toque.cima || botoes.cima;
+  const baixo = teclas['ArrowDown'] || teclas['KeyS'] || toque.baixo || botoes.baixo;
 
   if (j.estado === 'chao') {
     // andar para os lados
@@ -354,7 +524,7 @@ function atualizarJogador(dt) {
 }
 
 function atualizarBarris(dt) {
-  const vel = 70 + 6 * andarMax; // barris ficam mais rápidos conforme você sobe
+  const vel = (70 + 6 * andarMax) * dif.velBarril; // barris ficam mais rápidos conforme você sobe (e na dificuldade alta)
   for (let i = barris.length - 1; i >= 0; i--) {
     const b = barris[i];
     if (!b.caindo) {
@@ -463,7 +633,7 @@ function danoFogo() {
 function ganhar() {
   const bonus = Math.max(0, Math.round(1000 - tempoJogo * 8)); // quanto mais rápido, mais pontos
   pontos += bonus;
-  popups.push({ x: 180, y: 120, txt: 'Bônus de tempo +' + bonus, t: 0 });
+  popups.push({ x: L / 2, y: 120, txt: 'Bônus de tempo +' + bonus, t: 0 });
   salvarRecorde();
   estado = 'ganhou';
   bloqueio = performance.now() + 800;
@@ -571,7 +741,8 @@ function lancarGarrafa() {
   const x0 = 62, y0 = andares[TOPO].y - 70;             // mão do macaco
   const dx = j.x - x0, dy = (j.y - 16) - y0;            // direção até onde o herói está AGORA
   const d = Math.hypot(dx, dy) || 1;
-  garrafas.push({ x: x0, y: y0, vx: dx / d * VEL_GARRAFA, vy: dy / d * VEL_GARRAFA, rot: 0 });
+  const vg = VEL_GARRAFA * dif.velGarrafa;
+  garrafas.push({ x: x0, y: y0, vx: dx / d * vg, vy: dy / d * vg, rot: 0 });
 }
 
 function atualizarGarrafas(dt) {
@@ -614,7 +785,7 @@ function atualizarVilao(dt) {
   tempoFuria -= dt;
   if (tempoFuria <= 0 && v.modo !== 'furia') {          // hora de enfurecer (a cada 15 s)
     v.modo = 'furia'; v.t = 0; v.lancados = 0;
-    tempoFuria += INTERVALO_FURIA;
+    tempoFuria += dif.intervaloFuria;
   }
   if (v.modo === 'furia') {
     v.t += dt;
@@ -627,7 +798,7 @@ function atualizarVilao(dt) {
     if (v.lancados === 1 && v.t >= 0.65) { lancarBanana(); v.lancados = 2; }
     if (v.t >= DURACAO_BANANA) {                        // terminou de comer
       v.modo = 'normal'; v.t = 0;
-      tempoBanana = 6 + Math.random() * 3;
+      tempoBanana = (6 + Math.random() * 3) * dif.intervaloBanana;
     }
   } else {
     if (tempoBanana > 0) tempoBanana -= dt;
@@ -677,7 +848,7 @@ function atualizar(dt) {
       tempoSpawn -= dt;
       if (tempoSpawn <= 0) {
         jogarBarril();
-        tempoSpawn = Math.max(1.1, 2.6 - 0.25 * andarMax) + Math.random() * 0.6;
+        tempoSpawn = (Math.max(1.1, 2.6 - 0.25 * andarMax) + Math.random() * 0.6) * dif.intervaloBarril;
       }
     }
     atualizarJogador(dt);
@@ -734,7 +905,7 @@ const prediosFrente = gerarPredios(7, 240, 560, 20);   // prédios da frente (ma
 function desenharPredios(lista, cor, alpha) {
   for (const p of lista) {
     if (p.x + p.w < vx0 - 10 || p.x > vx1 + 10) continue;   // só desenha o que aparece na tela
-    const topo = 710 - p.h;
+    const topo = (A - 30) - p.h * (A / 740);       // prédios crescem junto com a torre
     ctx.fillStyle = cor;
     ctx.fillRect(p.x, topo, p.w, p.h);
     if (p.antena) ctx.fillRect(p.x + Math.floor(p.w / 2), topo - p.antena, 2, p.antena);
@@ -757,7 +928,8 @@ function nuvem(x, y, w) {
 function desenharFundo() {
   const largura = vx1 - vx0 + 20;
   // céu roxo que vira rosa perto do chão (cobre toda a tela)
-  const g = ctx.createLinearGradient(0, 0, 0, 710);
+  const chao = A - 30;                      // altura onde começa o chão de pedras
+  const g = ctx.createLinearGradient(0, 0, 0, chao);
   g.addColorStop(0, '#24105a');
   g.addColorStop(0.5, '#4a2397');
   g.addColorStop(0.85, '#c0489f');
@@ -766,21 +938,21 @@ function desenharFundo() {
   ctx.fillRect(vx0 - 10, vy0 - 10, largura, vy1 - vy0 + 20);
   // listras horizontais no céu
   ctx.fillStyle = 'rgba(190,150,255,0.14)';
-  for (let y = 260; y < 700; y += 22) ctx.fillRect(vx0 - 10, y, largura, 4 + (y - 260) / 60);
+  for (let y = 260 * A / 740; y < chao - 10; y += 22) ctx.fillRect(vx0 - 10, y, largura, 4 + (y - 260) / 60);
   // nuvens devagarinho para o lado
   const nuvens = [[20, 130, 70], [190, 190, 90], [260, 100, 60], [90, 300, 80], [300, 420, 70], [40, 520, 64]];
   const faixa = (vx1 - vx0) + 160;
-  for (const n of nuvens) nuvem(((n[0] * faixa / L + relogio * 5) % faixa) + vx0 - 90, n[1], n[2]);
+  for (const n of nuvens) nuvem(((n[0] * faixa / L + relogio * 5) % faixa) + vx0 - 90, n[1] * A / 740, n[2]);
   // cidade
   desenharPredios(prediosFundo, '#33206e', 0.5);
   desenharPredios(prediosFrente, '#150b32', 0.9);
   // chão de pedras roxas
   ctx.fillStyle = '#2b2158';
-  ctx.fillRect(vx0 - 10, 710, largura, vy1 - 710 + 10);
+  ctx.fillRect(vx0 - 10, chao, largura, vy1 - chao + 10);
   ctx.fillStyle = '#9b5cff';
-  ctx.fillRect(vx0 - 10, 710, largura, 4);
+  ctx.fillRect(vx0 - 10, chao, largura, 4);
   ctx.fillStyle = '#41367d';
-  for (let y = 718, linha = 0; y < vy1 + 10; y += 10, linha++) {
+  for (let y = chao + 8, linha = 0; y < vy1 + 10; y += 10, linha++) {
     for (let x = Math.floor((vx0 - 20) / 20) * 20 + (linha % 2) * 10; x < vx1 + 20; x += 20) ctx.fillRect(x, y, 16, 7);
   }
 }
@@ -867,8 +1039,9 @@ function desenharBau(x, y) {
 function desenharMeta() {
   // baú de bananas no topo, perto da última escada
   const y = andares[TOPO].y;
-  desenharBau(176, y);
-  texto('TOPO', 176, y - 46, 11, '#ffd400');
+  const x = andares[TOPO].x2 - 24;
+  desenharBau(x, y);
+  texto('TOPO', x, y - 46, 11, '#ffd400');
 }
 
 function desenharBarrilNo(x, y, rot) {
@@ -1111,6 +1284,9 @@ function desenharVilao() {
   ctx.restore();
 }
 
+// Cores do macaquinho herói (dourado, para não se confundir com o macaco vilão)
+const PELO = '#d99a3d', PELO_ESC = '#b9772f', PELO_CLARO = '#f6dcae';
+
 function desenharHeroi() {
   const j = jogador;
   if (invulneravel > 0 && Math.floor(relogio * 12) % 2 === 0) return; // pisca depois de se machucar
@@ -1143,15 +1319,23 @@ function desenharHeroi() {
     ctx.translate(0, 14);
   }
   if (j.estado === 'escada') {
-    // de frente, braços alternando
-    ctx.fillStyle = '#2b4c9b';
+    // macaquinho de frente subindo a escada, braços alternando
+    ctx.strokeStyle = PELO_ESC; ctx.lineWidth = 2; ctx.lineCap = 'round';       // rabinho
+    ctx.beginPath(); ctx.moveTo(4, -8); ctx.quadraticCurveTo(13, -8, 10, -17); ctx.stroke();
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = PELO_ESC;                                                    // pernas
     ctx.fillRect(-5, -9, 4, f ? 6 : 9); ctx.fillRect(1, -9, 4, f ? 9 : 6);
-    ctx.fillStyle = '#ffb300'; ctx.fillRect(-7, -20, 14, 12);
-    ctx.fillStyle = '#fff'; ctx.fillRect(-7, -15, 14, 2);
-    ctx.fillStyle = '#f4c9a0';
-    ctx.fillRect(-10, f ? -28 : -22, 3, 8); ctx.fillRect(7, f ? -22 : -28, 3, 8);
-    ctx.fillRect(-4, -27, 8, 7);
-    ctx.fillStyle = '#ff7a00'; ctx.fillRect(-6, -32, 12, 6);
+    ctx.fillStyle = '#2b4c9b'; ctx.fillRect(-6, -12, 12, 4);                     // shorts azul
+    ctx.fillStyle = PELO; ctx.fillRect(-6, -20, 12, 9);                          // corpo
+    ctx.fillStyle = PELO_CLARO; ctx.fillRect(-3, -18, 6, 6);                     // barriga
+    ctx.fillStyle = PELO;
+    ctx.fillRect(-10, f ? -28 : -22, 3, 8); ctx.fillRect(7, f ? -22 : -28, 3, 8);   // braços
+    ctx.fillRect(-5, -29, 10, 9);                                                // cabeça
+    ctx.beginPath(); ctx.arc(-6, -25, 3.2, 0, Math.PI * 2); ctx.arc(6, -25, 3.2, 0, Math.PI * 2); ctx.fill();   // orelhas
+    ctx.fillStyle = PELO_CLARO;
+    ctx.beginPath(); ctx.arc(-6, -25, 1.6, 0, Math.PI * 2); ctx.arc(6, -25, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(-3, -27, 6, 6);                                                 // rosto
+    ctx.fillStyle = '#000'; ctx.fillRect(-2, -26, 1.5, 2); ctx.fillRect(1, -26, 1.5, 2); ctx.fillRect(-1, -22, 2, 1);
     if (martelo > 0) {                               // marreta ao lado do corpo na escada
       ctx.save();
       ctx.translate(9, -18);
@@ -1162,17 +1346,25 @@ function desenharHeroi() {
   } else {
     ctx.scale(j.face, 1);
     const ar = j.estado === 'ar' || j.estado === 'escorrega' || j.estado === 'queda';
-    ctx.fillStyle = '#2b4c9b';                     // pernas
+    // macaquinho de lado (bem menor que o macaco vilão)
+    ctx.strokeStyle = PELO_ESC; ctx.lineWidth = 2; ctx.lineCap = 'round';       // rabinho enrolado
+    ctx.beginPath(); ctx.moveTo(-5, -10); ctx.quadraticCurveTo(-14, -9, -11, -19); ctx.stroke();
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = PELO_ESC;                                                    // pernas
     if (ar) { ctx.fillRect(-6, -9, 5, 7); ctx.fillRect(2, -9, 6, 5); }
     else { ctx.fillRect(-5 + (f ? -1 : 1), -9, 4, 9); ctx.fillRect(1 + (f ? 1 : -1), -9, 4, 9); }
-    ctx.fillStyle = '#ffb300'; ctx.fillRect(-7, -20, 14, 12);   // colete
-    ctx.fillStyle = '#fff'; ctx.fillRect(-7, -15, 14, 2);       // faixa refletiva
-    ctx.fillStyle = '#f4c9a0';                                  // braço
+    ctx.fillStyle = '#2b4c9b'; ctx.fillRect(-6, -12, 12, 4);                     // shorts azul
+    ctx.fillStyle = PELO; ctx.fillRect(-6, -20, 12, 9);                          // corpo
+    ctx.fillStyle = PELO_CLARO; ctx.fillRect(-1, -18, 6, 6);                     // barriga
+    ctx.fillStyle = PELO;                                                        // braço
     if (ar) ctx.fillRect(3, -28, 3, 9); else ctx.fillRect(-1, -19, 3, 8);
-    ctx.fillRect(-4, -27, 8, 7);                                // rosto
-    ctx.fillStyle = '#000'; ctx.fillRect(1, -25, 2, 2);         // olho
-    ctx.fillStyle = '#ff7a00'; ctx.fillRect(-6, -32, 12, 6);    // capacete
-    ctx.fillRect(2, -28, 6, 2);
+    ctx.fillRect(-5, -29, 10, 9);                                                // cabeça
+    ctx.beginPath(); ctx.arc(-4, -25, 3.2, 0, Math.PI * 2); ctx.fill();          // orelha
+    ctx.fillStyle = PELO_CLARO;
+    ctx.beginPath(); ctx.arc(-4, -25, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(0, -27, 6, 6);                                                  // focinho
+    ctx.fillStyle = '#000'; ctx.fillRect(1.5, -27, 2, 2);                        // olho
+    ctx.fillStyle = '#5a3210'; ctx.fillRect(4.5, -24, 1.5, 1.5);                 // nariz
     if (martelo > 0) {                               // marreta balançando para frente
       ctx.save();
       ctx.translate(5, -16);
@@ -1198,13 +1390,16 @@ function coracao(x, y, s, cor) {
 function desenharHUD() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(vx0 - 10, 0, vx1 - vx0 + 20, 46);
+  ctx.save();
+  ctx.translate(DX, 0);                              // os itens do topo ficam centralizados
   texto('PONTOS', 12, 17, 12, '#9fb3d9', 'left');
   texto(String(pontos), 12, 38, 20, '#ffffff', 'left');
   texto('RECORDE', 150, 17, 12, '#9fb3d9');
   texto(String(Math.max(recorde, pontos)), 150, 38, 20, '#ffd400');
   // vidas: 3 corações, ou 4 se pegou o coração extra
-  const nCor = Math.max(3, vidas);
-  for (let i = 0; i < nCor; i++) coracao(L - 22 - i * 24, 12, 20, i < vidas ? '#ff3b4e' : '#3a3f55');
+  const nCor = Math.max(dif.vidas, vidas);          // um coração para cada vida (cabem até 5 no topo)
+  const espaco = nCor <= 4 ? 24 : 20;
+  for (let i = 0; i < nCor; i++) coracao(360 - 22 - i * espaco, 12, 20, i < vidas ? '#ff3b4e' : '#3a3f55');
   if (estado === 'jogo') {                           // botão de pausa
     const b = botaoPausa;
     ctx.fillStyle = '#2b2158'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -1218,6 +1413,7 @@ function desenharHUD() {
     ctx.fillStyle = '#3a3f55'; ctx.fillRect(72, 54, 100, 8);
     ctx.fillStyle = '#ffb300'; ctx.fillRect(72, 54, 100 * martelo / TEMPO_MARRETA, 8);
   }
+  ctx.restore();
 }
 
 function painel(y, h) {
@@ -1229,6 +1425,8 @@ function painel(y, h) {
 
 function desenharTelas() {
   const piscar = Math.floor(relogio * 2) % 2 === 0;
+  ctx.save();
+  ctx.translate(DX, DY);                             // menus sempre no centro da torre
   if (estado === 'menu') {
     painel(100, 490);
     texto('DONKEY SEST', 180, 158, 38, '#ffd400');
@@ -1237,36 +1435,97 @@ function desenharTelas() {
     texto('A / D ou ← →: andar', 180, 254, 14, '#ffffff');
     texto('W / S ou ↑ ↓: subir e descer escadas', 180, 276, 14, '#ffffff');
     texto('Espaço ou W: pular', 180, 298, 14, '#ffffff');
-    texto('Celular: arraste para andar e subir,', 180, 324, 13, '#9fb3d9');
-    texto('toque rápido para pular', 180, 342, 13, '#9fb3d9');
+    texto(controlesToque ? 'Celular: use os botões ◀ ▶ ▼ ▲ e PULAR' : 'Celular: arraste para andar e subir,', 180, 324, 13, '#9fb3d9');
+    texto(controlesToque ? '(ou arraste o dedo / toque rápido)' : 'toque rápido para pular', 180, 342, 13, '#9fb3d9');
     texto('Pule por cima do barril: +100 pontos', 180, 374, 14, '#5de0ff');
     texto('Marreta: quebra barris e garrafas (+300)', 180, 396, 13, '#ffb300');
     texto('Cuidado: banana faz escorregar e cair!', 180, 418, 13, '#ffe14d');
     texto('A cada 15 s o macaco enfurece!', 180, 440, 13, '#ff8a5c');
     texto('Pegue o coração: +1 vida', 180, 462, 13, '#ff6b7a');
-    texto('Você tem 3 vidas. Pause: botão ou tecla P', 180, 484, 13, '#9fb3d9');
-    if (piscar) texto('TOQUE OU ESPAÇO PARA JOGAR', 180, 545, 16, '#ffd400');
+    texto('Pause: botão ou tecla P', 180, 484, 13, '#9fb3d9');
+    if (piscar) texto('TOQUE OU ESPAÇO PARA ESCOLHER', 180, 545, 16, '#ffd400');
+  } else if (estado === 'dificuldade') {
+    painel(150, 400);
+    texto('ESCOLHA A DIFICULDADE', 180, 196, 22, '#ffd400');
+    texto('Toque num nível para começar', 180, 218, 13, '#9fb3d9');
+    for (const b of botoesNivel) {
+      const sel = b.i === opcaoNivel;
+      ctx.fillStyle = sel ? b.cor : '#2b2158';
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = b.cor; ctx.lineWidth = sel ? 4 : 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
+      texto(NIVEIS[ORDEM_NIVEIS[b.i]].nome, b.x + b.w / 2, b.y + 32, 24, sel ? '#1a1033' : b.cor);
+      texto(b.desc, b.x + b.w / 2, b.y + 56, 11, sel ? '#1a1033' : '#ffffff');
+    }
+    texto('↑ ↓ escolhem · Enter ou toque começa', 180, 520, 12, '#9fb3d9');
   } else if (estado === 'perdeu') {
     painel(240, 250);
     texto('FIM DE JOGO', 180, 295, 34, '#ff3b4e');
     texto('Pontos: ' + pontos, 180, 345, 22, '#ffffff');
     texto('Recorde: ' + recorde, 180, 378, 20, '#ffd400');
-    texto('Os barris venceram desta vez!', 180, 415, 14, '#9fb3d9');
+    texto('Dificuldade: ' + dif.nome, 180, 415, 14, '#9fb3d9');
     if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 465, 17, '#ffd400');
   } else if (estado === 'ganhou') {
     painel(240, 250);
     texto('VOCÊ CHEGOU AO TOPO!', 180, 295, 26, '#5de0ff');
     texto('Pontos: ' + pontos, 180, 345, 22, '#ffffff');
     texto('Recorde: ' + recorde, 180, 378, 20, '#ffd400');
-    texto('Parabéns, campeão!', 180, 415, 14, '#9fb3d9');
+    texto('Parabéns, campeão! (' + dif.nome + ')', 180, 415, 14, '#9fb3d9');
     if (piscar) texto('TOQUE PARA JOGAR DE NOVO', 180, 465, 17, '#ffd400');
   }
+  ctx.restore();
+}
+
+// Retângulo com cantos arredondados
+function retArredondado(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Botões na tela para celular: ◀ ▶ ▼ ▲ e PULAR (desenhados em pixels da tela, por cima do jogo)
+function desenharBotoesToque() {
+  if (!controlesToque || estado !== 'jogo') return;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const pulando = Object.keys(dedosBotao).some(function (id) { return dedosBotao[id] === 'pulo'; });
+  for (const b of botoesTela.lista) {
+    const ativo = b.id === 'pulo' ? pulando : botoes[b.id];
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2, k = b.w * 0.26;
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = ativo ? '#ffd400' : '#1a1033';
+    retArredondado(b.x, b.y, b.w, b.h, 14);
+    ctx.fill();
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = '#ffd400'; ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = ativo ? '#1a1033' : '#ffd400';
+    if (b.id === 'pulo') {
+      ctx.font = 'bold ' + Math.round(b.w * 0.2) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('PULAR', cx, cy);
+    } else {
+      ctx.beginPath();                                   // seta (triângulo)
+      if (b.id === 'esq') { ctx.moveTo(cx + k, cy - k); ctx.lineTo(cx - k, cy); ctx.lineTo(cx + k, cy + k); }
+      else if (b.id === 'dir') { ctx.moveTo(cx - k, cy - k); ctx.lineTo(cx + k, cy); ctx.lineTo(cx - k, cy + k); }
+      else if (b.id === 'cima') { ctx.moveTo(cx - k, cy + k * 0.7); ctx.lineTo(cx, cy - k); ctx.lineTo(cx + k, cy + k * 0.7); }
+      else { ctx.moveTo(cx - k, cy - k * 0.7); ctx.lineTo(cx, cy + k); ctx.lineTo(cx + k, cy - k * 0.7); }
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 // Menu de pausa (escurece a tela e mostra os dois botões)
 function desenharPausa() {
   ctx.fillStyle = 'rgba(5,3,20,0.6)';
   ctx.fillRect(vx0 - 10, vy0 - 10, vx1 - vx0 + 20, vy1 - vy0 + 20);
+  ctx.save();
+  ctx.translate(DX, DY);
   painel(290, 200);
   texto('PAUSADO', 180, 338, 32, '#ffd400');
   for (let i = 0; i < botoesPausa.length; i++) {
@@ -1277,6 +1536,7 @@ function desenharPausa() {
     ctx.strokeStyle = '#ffd400'; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
     texto(b.txt, b.x + b.w / 2, b.y + 29, 18, sel ? '#1a1033' : '#ffffff');
   }
+  ctx.restore();
 }
 
 function desenhar() {
@@ -1295,7 +1555,7 @@ function desenhar() {
   for (const b of barris) desenharBarrilNo(b.x, b.y, b.rot);
   desenharGarrafas();
   desenharParticulas();
-  if (estado !== 'menu') desenharHeroi();
+  if (estado !== 'menu' && estado !== 'dificuldade') desenharHeroi();
   else { jogador.face = 1; desenharHeroi(); }
 
   for (const p of popups) {                         // textos que sobem e somem
@@ -1307,6 +1567,7 @@ function desenhar() {
 
   desenharHUD();
   desenharTelas();
+  desenharBotoesToque();
   if (pausado) desenharPausa();
 }
 
