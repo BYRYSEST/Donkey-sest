@@ -118,11 +118,12 @@ const MAX_BANANAS = 5;         // máximo de bananas no cenário ao mesmo tempo
 // ---------- Dificuldades ----------
 // vidas: vidas no começo | velBarril: velocidade dos barris | intervaloBarril, intervaloBanana:
 // quanto menor, mais rápido o macaco joga | intervaloFuria: segundos entre as fúrias | velGarrafa: velocidade do fogo
-// O "médio" é o jogo normal; o "fácil" é mais calmo e o "difícil" tem um macaco muito mais rápido.
+// velVilao: velocidade dos movimentos do macaco (arremessos, ataque de banana e garrafas da fúria)
+// O "médio" é um desafio de verdade; o "fácil" é mais calmo e o "difícil" tem um macaco muito mais rápido.
 const NIVEIS = {
-  facil:   { nome: 'FÁCIL',   vidas: 4, velBarril: 0.75, intervaloBarril: 1.4, intervaloBanana: 1.6, intervaloFuria: 20, velGarrafa: 0.8 },
-  medio:   { nome: 'MÉDIO',   vidas: 3, velBarril: 1,    intervaloBarril: 1,   intervaloBanana: 1,   intervaloFuria: 15, velGarrafa: 1 },
-  dificil: { nome: 'DIFÍCIL', vidas: 2, velBarril: 1.3,  intervaloBarril: 0.7, intervaloBanana: 0.6, intervaloFuria: 10, velGarrafa: 1.35 }
+  facil:   { nome: 'FÁCIL',   vidas: 4, velBarril: 0.75, intervaloBarril: 1.4,  intervaloBanana: 1.6,  intervaloFuria: 20, velGarrafa: 0.8,  velVilao: 0.85 },
+  medio:   { nome: 'MÉDIO',   vidas: 3, velBarril: 1.25, intervaloBarril: 0.75, intervaloBanana: 0.75, intervaloFuria: 12, velGarrafa: 1.2,  velVilao: 1.3 },
+  dificil: { nome: 'DIFÍCIL', vidas: 2, velBarril: 1.5,  intervaloBarril: 0.55, intervaloBanana: 0.45, intervaloFuria: 9,  velGarrafa: 1.6,  velVilao: 1.7 }
 };
 const ORDEM_NIVEIS = ['facil', 'medio', 'dificil'];
 let nivel = 'medio';           // dificuldade escolhida
@@ -240,8 +241,8 @@ function comecar(i) {
 // Botões da tela de dificuldade (posições dentro do painel)
 const botoesNivel = [
   { x: 50, y: 232, w: 260, h: 74, i: 0, cor: '#4cd964', desc: 'Mais vidas, barris lentos e poucos ataques' },
-  { x: 50, y: 320, w: 260, h: 74, i: 1, cor: '#ffd400', desc: 'Como o jogo foi pensado' },
-  { x: 50, y: 408, w: 260, h: 74, i: 2, cor: '#ff3b4e', desc: 'Vilão rápido, ataca sem parar e só 2 vidas' }
+  { x: 50, y: 320, w: 260, h: 74, i: 1, cor: '#ffd400', desc: 'Macaco mais rápido e barris mais seguidos' },
+  { x: 50, y: 408, w: 260, h: 74, i: 2, cor: '#ff3b4e', desc: 'Macaco muito rápido, só 2 vidas. Boa sorte!' }
 ];
 function nivelEm(p) {
   for (const b of botoesNivel) if (dentro(p, b, 0)) return b.i;
@@ -789,11 +790,12 @@ function atualizarVilao(dt) {
   }
   if (v.modo === 'furia') {
     v.t += dt;
-    if (v.lancados === 0 && v.t >= 1.0) { lancarGarrafa(); v.lancados = 1; }   // 1ª garrafa
-    if (v.lancados === 1 && v.t >= 2.5) { lancarGarrafa(); v.lancados = 2; }   // 2ª garrafa
+    // macaco mais rápido solta as garrafas mais cedo (a fúria continua durando 4 s)
+    if (v.lancados === 0 && v.t >= 1.0 / dif.velVilao) { lancarGarrafa(); v.lancados = 1; }   // 1ª garrafa
+    if (v.lancados === 1 && v.t >= 2.5 / dif.velVilao) { lancarGarrafa(); v.lancados = 2; }   // 2ª garrafa
     if (v.t >= DURACAO_FURIA) { v.modo = 'normal'; v.t = 0; }                 // 4 s: acabou
   } else if (v.modo === 'banana') {
-    v.t += dt;
+    v.t += dt * Math.max(1, dif.velVilao);              // macaco mais rápido termina o ataque de banana antes
     if (v.lancados === 0 && v.t >= 0.35) { lancarBanana(); v.lancados = 1; }
     if (v.lancados === 1 && v.t >= 0.65) { lancarBanana(); v.lancados = 2; }
     if (v.t >= DURACAO_BANANA) {                        // terminou de comer
