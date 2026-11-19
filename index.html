@@ -168,7 +168,6 @@ function montarTorre(n) {
   escadas = [];
   for (let k = 0; k < n - 2; k++) {
     for (const f of padroes[k % 4]) escadas.push({ x: Math.round(f * L), base: k });
-    if (L > 520) escadas.push({ x: Math.round(L / 2), base: k });   // andares largos ganham uma escada no meio
   }
   escadas.push({ x: larguraTopo - 50, base: n - 2 });               // última escada, até o topo
 }
