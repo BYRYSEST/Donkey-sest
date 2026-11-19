@@ -40,16 +40,27 @@ const ctx = tela.getContext('2d');
 let dpr = 1, esc = 1, ox = 0, oy = 0;      // zoom e posição do mundo na tela
 let vx0 = 0, vx1 = L, vy0 = 0, vy1 = A;    // parte do mundo que aparece na tela
 
-// Posição dos botões da tela (em pixels): ◀ ▶ à esquerda e ▼ ▲ PULAR à direita
+// Posição dos botões da tela (em pixels).
+// Celular em pé: as 4 setas (◀ ▼ ▲ ▶) juntas no meio da parte de baixo, com o botão PULAR separado ao lado.
+// Celular deitado: as 4 setas ficam juntas no canto esquerdo e o PULAR no canto direito (sobra espaço ali).
 function calcularBotoes(w, h) {
-  const s = Math.max(50, Math.min(76, Math.round(Math.min(w, h) * 0.16)));   // tamanho do botão
+  const s = Math.max(44, Math.min(70, Math.round(Math.min(w, h) * 0.15)));   // tamanho do botão
   const m = 14, g = 8, y = h - m - s;
+  const larguraSetas = 4 * s + 3 * g;
+  let xs, xp;                                          // onde começam as setas e o botão de pular
+  if (w > h) { xs = m; xp = w - m - s; }
+  else {
+    const folga = 22;                                  // espaço entre as setas e o PULAR
+    xs = Math.round((w - (larguraSetas + folga + s)) / 2);   // o conjunto todo fica centralizado
+    xs = Math.max(6, xs);
+    xp = xs + larguraSetas + folga;
+  }
   return { s: s, lista: [
-    { id: 'esq',   x: m,                    y: y, w: s, h: s },
-    { id: 'dir',   x: m + s + g,            y: y, w: s, h: s },
-    { id: 'baixo', x: w - m - 3 * s - 2 * g, y: y, w: s, h: s },
-    { id: 'cima',  x: w - m - 2 * s - g,    y: y, w: s, h: s },
-    { id: 'pulo',  x: w - m - s,            y: y, w: s, h: s }
+    { id: 'esq',   x: xs,               y: y, w: s, h: s },
+    { id: 'baixo', x: xs + (s + g),     y: y, w: s, h: s },
+    { id: 'cima',  x: xs + 2 * (s + g), y: y, w: s, h: s },
+    { id: 'dir',   x: xs + 3 * (s + g), y: y, w: s, h: s },
+    { id: 'pulo',  x: xp,               y: y, w: s, h: s }
   ] };
 }
 // Altura que o jogo deixa livre embaixo para os botões (só em celular em pé;
@@ -1437,7 +1448,7 @@ function desenharTelas() {
     texto('A / D ou ← →: andar', 180, 254, 14, '#ffffff');
     texto('W / S ou ↑ ↓: subir e descer escadas', 180, 276, 14, '#ffffff');
     texto('Espaço ou W: pular', 180, 298, 14, '#ffffff');
-    texto(controlesToque ? 'Celular: use os botões ◀ ▶ ▼ ▲ e PULAR' : 'Celular: arraste para andar e subir,', 180, 324, 13, '#9fb3d9');
+    texto(controlesToque ? 'Celular: use as setas ◀ ▼ ▲ ▶ e PULAR' : 'Celular: arraste para andar e subir,', 180, 324, 13, '#9fb3d9');
     texto(controlesToque ? '(ou arraste o dedo / toque rápido)' : 'toque rápido para pular', 180, 342, 13, '#9fb3d9');
     texto('Pule por cima do barril: +100 pontos', 180, 374, 14, '#5de0ff');
     texto('Marreta: quebra barris e garrafas (+300)', 180, 396, 13, '#ffb300');
@@ -1488,7 +1499,7 @@ function retArredondado(x, y, w, h, r) {
   ctx.closePath();
 }
 
-// Botões na tela para celular: ◀ ▶ ▼ ▲ e PULAR (desenhados em pixels da tela, por cima do jogo)
+// Botões na tela para celular: ◀ ▼ ▲ ▶ e PULAR (desenhados em pixels da tela, por cima do jogo)
 function desenharBotoesToque() {
   if (!controlesToque || estado !== 'jogo') return;
   ctx.save();
